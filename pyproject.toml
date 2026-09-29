@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+# Имя дистрибутива совпадает с именем репозитория: нашёл репозиторий —
+# знаешь, что писать в pip install. Имя ПАКЕТА при этом другое — onec_audit, —
+# потому что идентификатор Python не может начинаться с цифры:
+# `import 1c_audit` даёт SyntaxError: invalid decimal literal.
+# Расхождение имени установки и имени импорта обычное дело: pillow/PIL,
+# beautifulsoup4/bs4, python-dateutil/dateutil.
+name = "1c-audit"
+version = "0.1.0"
+description = "Чтение и диагностика базы 1С:Предприятие через COM. Только чтение, без расширений и веб-публикации."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+keywords = ["1c", "1c-enterprise", "onec", "com", "mcp", "audit", "read-only"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: Russian",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial :: Accounting",
+]
+dependencies = [
+    "pywin32>=306",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0"]
+
+[project.scripts]
+onec-audit = "onec_audit.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/dewil/1c-audit"
+Issues = "https://github.com/dewil/1c-audit/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/onec_audit"]

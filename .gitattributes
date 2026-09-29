@@ -1,0 +1,15 @@
+# Единые переводы строк в репозитории, CRLF только в рабочей копии Windows
+* text=auto eol=lf
+
+*.py   text eol=lf
+*.md   text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+
+# PowerShell 5.1 читает .ps1 как ANSI без BOM — таким файлам нужен CRLF и BOM
+*.ps1  text eol=crlf working-tree-encoding=UTF-8
+
+*.1CD binary
+*.dt  binary
+*.cf  binary
+*.epf binary
