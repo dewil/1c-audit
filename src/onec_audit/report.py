@@ -2,7 +2,6 @@
 """Накопление и вывод отчёта."""
 from __future__ import annotations
 
-import os
 from typing import Any
 
 
@@ -23,6 +22,7 @@ class Report:
     def __init__(self, echo: bool = True) -> None:
         self.lines: list[str] = []
         self.findings: list[str] = []
+        self.failures: dict[str, list[str]] = {}
         self.echo = echo
 
     def w(self, line: str = "") -> None:
@@ -43,19 +43,32 @@ class Report:
         """Находка для итоговой сводки. Только устранимое."""
         self.findings.append(text)
 
+    def fail(self, check: str, reason: str) -> None:
+        """Проверка не выполнена (целиком или частично). Повтор имени не считается,
+        причины копятся. Строка идёт и в тело: отказ виден в своей секции."""
+        self.failures.setdefault(check, []).append(reason)
+        self.w(f"   не выполнено: {reason}")
+
+    def exit_code(self) -> int:
+        """0 — чисто, 1 — есть находки, 4 — есть невыполненные проверки."""
+        if self.failures:
+            return 4
+        return 1 if self.findings else 0
+
     def summary(self) -> None:
         self.w()
         self.rule("=")
         self.w("ЧТО ПОСМОТРЕТЬ")
         self.rule("=")
-        if not self.findings:
+        if self.failures:
+            self.w(f"   не выполнено проверок: {len(self.failures)}")
+            for name, reasons in self.failures.items():
+                self.w(f"      {name}: {'; '.join(reasons)}")
+        elif not self.findings:
             self.w("   ничего требующего внимания не найдено")
         for i, text in enumerate(self.findings, 1):
             self.w(f"   {i}. {text}")
 
     def save(self, path: str) -> None:
-        directory = os.path.dirname(os.path.abspath(path))
-        if directory:
-            os.makedirs(directory, exist_ok=True)
         with open(path, "w", encoding="utf-8-sig", newline="\r\n") as fh:
             fh.write("\n".join(self.lines) + "\n")

@@ -7,7 +7,7 @@ import datetime as dt
 import os
 import sys
 
-from .base import Base, BitnessError, ConnectError
+from .base import Base, BitnessError
 from .checks import ALL_CHECKS, Options
 from .report import Report
 
@@ -46,13 +46,23 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _close(base) -> None:
+    try:
+        base.close()
+    except Exception as exc:  # закрытие не меняет результат прогона
+        print(f"ПРЕДУПРЕЖДЕНИЕ: не удалось закрыть соединение: {exc}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     # консоль Windows (cp1251) не умеет часть символов отчёта, например «−»
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    args = build_parser().parse_args(argv)
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit as exc:  # argparse выходит сам: отдаём его код, не бросаем
+        return exc.code if isinstance(exc.code, int) else 2
 
-    if not args.base and not args.srvr:
+    if (not args.base and not args.srvr) or (args.srvr and not args.ref):
         print("STOP: укажите --base (файловая база) либо --srvr и --ref.\n"
               "      Можно задать переменными окружения ONEC_BASE / ONEC_SRVR+ONEC_REF.",
               file=sys.stderr)
@@ -61,11 +71,19 @@ def main(argv: list[str] | None = None) -> int:
     report = Report(echo=not args.quiet)
     try:
         base = Base(args.base, srvr=args.srvr, ref=args.ref, user=args.user)
-    except BitnessError as exc:
+    except (BitnessError, ValueError) as exc:
         print(f"STOP: {exc}", file=sys.stderr)
         return 2
-    except ConnectError as exc:
+    except Exception as exc:
         print(f"STOP: {exc}", file=sys.stderr)
+        return 3
+
+    try:  # шапку читаем до печати: при ошибке отчёт не начинается
+        config = f"{base.config_synonym}  {base.config_version}"
+        platform = base.platform_version()
+    except Exception as exc:
+        print(f"STOP: не удалось прочитать шапку базы: {exc}", file=sys.stderr)
+        _close(base)
         return 3
 
     options = Options(
@@ -74,33 +92,42 @@ def main(argv: list[str] | None = None) -> int:
         all_docs=args.all_docs,
     )
 
-    started = dt.datetime.now()
-    report.rule("=")
-    report.w(f"ДИАГНОСТИКА 1С — {started:%Y-%m-%d %H:%M}")
-    report.rule("=")
-    report.w(f"База        : {base.description}")
-    report.w(f"Конфигурация: {base.config_synonym}  {base.config_version}")
-    report.w(f"Платформа   : {base.platform_version()}")
+    code = 4  # что бы ни случилось после начала отчёта, это не «чисто»
+    try:
+        started = dt.datetime.now()
+        report.rule("=")
+        report.w(f"ДИАГНОСТИКА 1С — {started:%Y-%m-%d %H:%M}")
+        report.rule("=")
+        report.w(f"База        : {base.description}")
+        report.w(f"Конфигурация: {config}")
+        report.w(f"Платформа   : {platform}")
 
-    for check in ALL_CHECKS:
-        try:
-            check(base, report, options)
-        except Exception as exc:  # одна упавшая проверка не должна ронять отчёт
-            report.w()
-            report.w(f"   проверка {check.__name__} не выполнена: {exc}")
+        for check in ALL_CHECKS:
+            try:
+                check(base, report, options)
+            except Exception as exc:  # одна упавшая проверка не должна ронять отчёт
+                report.w()
+                report.fail(check.__name__, str(exc))
 
-    report.summary()
-    report.w()
-    report.w(f"Время выполнения: {(dt.datetime.now() - started).total_seconds():.0f} с. "
-             "Записано в базу: НИЧЕГО.")
+        report.summary()
+        report.w()
+        report.w(f"Время выполнения: {(dt.datetime.now() - started).total_seconds():.0f} с. "
+                 "Записано в базу: НИЧЕГО.")
 
-    if args.out:
-        report.save(args.out)
-        if not args.quiet:
-            print(f"\nОтчёт сохранён: {args.out}")
+        code = report.exit_code()
+        if args.out:
+            try:
+                report.save(args.out)
+                if not args.quiet:
+                    print(f"\nОтчёт сохранён: {args.out}")
+            except Exception as exc:
+                print(f"STOP: не удалось сохранить отчёт: {exc}", file=sys.stderr)
+                code = 4
+    except Exception as exc:
+        print(f"STOP: сбой при выводе отчёта: {exc}", file=sys.stderr)
 
-    base.close()
-    return 0
+    _close(base)
+    return code
 
 
 if __name__ == "__main__":
