@@ -18,6 +18,7 @@ from onec_audit.report import Report
 M_DUP = "// контрагенты: один ИНН"
 M_NOINN = "// список: без ИНН"
 M_BAL = "// закрытие: остатки"
+M_OPS = "// закрытие: операции"
 
 
 def ns(**kw):
@@ -166,6 +167,7 @@ def test_ac5_next_month_start_literal(ym, literal, fake_base, capsys, monkeypatc
     for q in qs:
         assert literal in q
         assert "23, 59, 59" not in q
+        assert "90.09" not in q  # AC-10: перечень 20, 25, 26, 44
 
 
 @pytest.mark.closing_balances
@@ -189,4 +191,90 @@ def test_ac7_group_by_account_not_account_code(fake_base, capsys, monkeypatch):
     for q in qs:
         assert "СГРУППИРОВАТЬ ПО" in q
         assert "СГРУППИРОВАТЬ ПО Ост.Счет.Код" not in q
+        assert "90.09" not in q  # AC-10
         assert "СГРУППИРОВАТЬ ПО Ост.Счет" in q  # уточнение INV-AUDIT-60
+
+
+# ---------- Корень 3: closing_state ----------
+def _months(monkeypatch, yms):
+    monkeypatch.setattr(checks_mod, "months_to_check", lambda opt, today: list(yms))
+
+
+def _state_base(fake, ops=(), bal=()):
+    fake.names_by_kind["Документы"] = ["РегламентнаяОперация"]  # INV-AUDIT-14
+    fake.on(_m(M_OPS), list(ops))
+    fake.on(_m(M_BAL), list(bal))
+    return fake
+
+
+def _month_line(body, ym):
+    return next(ln for ln in body.splitlines() if ym in ln)
+
+
+@pytest.mark.closing_state
+def test_ac8_ops_without_postings_is_closed(fake_base, capsys, monkeypatch):
+    """AC-8 / INV-AUDIT-50: Всего=8, СДвижениями=0 -> 'закрыт', не в сводке, остатки не печатаются."""
+    _months(monkeypatch, [(2025, 12)])
+    _state_base(fake_base, ops=[ns(Год=2025, Месяц=12, Всего=8, СДвижениями=0)],
+                bal=[ns(Код="20", Сумма=500.0)])
+    body, summ, r = _run(checks_mod.month_closing, fake_base, capsys)
+    ln = _month_line(body, "2025-12")
+    assert "операций 8, с проводками 0" in ln and "закрыт" in ln
+    assert "не закрывался" not in ln and "[" not in ln
+    assert "не закрывался месяц" not in summ
+    assert len(r.failures) == 0
+
+
+@pytest.mark.closing_state
+def test_ac9_no_row_is_not_closed_and_in_summary(fake_base, capsys, monkeypatch):
+    """AC-9 / INV-AUDIT-50: нет строки в ответе -> 'не закрывался', в сводке."""
+    _months(monkeypatch, [(2026, 2)])
+    _state_base(fake_base)
+    body, summ, _ = _run(checks_mod.month_closing, fake_base, capsys)
+    assert "не закрывался" in _month_line(body, "2026-02")
+    assert "не закрывался месяц: 1 (2026-02 .. 2026-02)" in summ
+
+
+@pytest.mark.closing_state
+def test_ac10_no_9009_and_balances_only_for_unclosed(fake_base, capsys, monkeypatch):
+    """AC-10 / INV-AUDIT-60: запрос остатков без 90.09; остатки только у 'не закрывался'."""
+    _months(monkeypatch, [(2025, 11), (2025, 12)])
+    _state_base(fake_base, ops=[ns(Год=2025, Месяц=11, Всего=3, СДвижениями=2)],
+                bal=[ns(Код="26", Сумма=1234.56)])
+    body, _, _ = _run(checks_mod.month_closing, fake_base, capsys)
+    qs = [q for q in fake_base.queries if q.lstrip().startswith(M_BAL)]
+    assert qs, "остатки не запрашивались для месяца 'не закрывался'"
+    assert all("90.09" not in q for q in qs)
+    assert "[" not in _month_line(body, "2025-11")
+    assert "[26 " in _month_line(body, "2025-12")
+
+
+@pytest.mark.closing_state
+def test_ac11_five_months_one_summary_line(fake_base, capsys, monkeypatch):
+    """AC-11 / INV-AUDIT-50: пять месяцев подряд 'не закрывался' -> одна строка сводки с диапазоном."""
+    _months(monkeypatch, [(2026, m) for m in range(2, 7)])
+    _state_base(fake_base)
+    _, summ, _ = _run(checks_mod.month_closing, fake_base, capsys)
+    lines = [ln for ln in summ.splitlines() if "не закрывался месяц" in ln]
+    assert len(lines) == 1
+    assert "не закрывался месяц: 5 (2026-02 .. 2026-06)" in lines[0]
+
+
+@pytest.mark.closing_state
+def test_all_closed_no_summary_line(fake_base, capsys, monkeypatch):
+    """AC-8 / INV-AUDIT-50: все месяцы закрыты -> строки 'не закрывался месяц' нет."""
+    _months(monkeypatch, [(2025, 1), (2025, 2)])
+    _state_base(fake_base, ops=[ns(Год=2025, Месяц=1, Всего=2, СДвижениями=1),
+                                ns(Год=2025, Месяц=2, Всего=1, СДвижениями=1)])
+    _, summ, _ = _run(checks_mod.month_closing, fake_base, capsys)
+    assert "не закрывался месяц" not in summ
+
+
+@pytest.mark.closing_state
+def test_old_states_absent(fake_base, capsys, monkeypatch):
+    """AC-8 / INV-AUDIT-50: состояний 'не закрыт' и 'частично' по флагу больше нет."""
+    _months(monkeypatch, [(2025, 12)])
+    _state_base(fake_base, ops=[ns(Год=2025, Месяц=12, Всего=8, СДвижениями=5, Проведено=0)])
+    body, summ, _ = _run(checks_mod.month_closing, fake_base, capsys)
+    assert "частично" not in body + summ
+    assert not re.search(r"не закрыт(?!ся)", body + summ)
