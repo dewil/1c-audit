@@ -79,6 +79,8 @@ class FakeBase:
         self.raise_on: set[str] = set()  # имена шапки: config_synonym, ...
         self.queries: list[str] = []
         self.fill_names = False
+        # вид коллекции метаданных (Константы, РегистрыСведений) -> имена
+        self.names_by_kind: dict[str, list[str]] = {}
 
     # --- настройка ---
     def on(self, match, result):
@@ -129,9 +131,11 @@ class FakeBase:
         # По умолчанию метаданные пусты. В режиме "бросать на всё" или при
         # fill_names=True отдаются правдоподобные имена (У7), чтобы проверки
         # дошли до запросов.
+        kind = getattr(collection, "kind", "")
+        if kind in self.names_by_kind:
+            return list(self.names_by_kind[kind])
         if not (self.raise_all or self.fill_names):
             return []
-        kind = getattr(collection, "kind", "")
         if kind == "Документы":
             return list(PLAUSIBLE_DOCS)
         if kind == "Справочники":
