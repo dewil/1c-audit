@@ -121,12 +121,16 @@ def test_two_dupe_groups_counted_separately(fake_base, capsys):
 
 @pytest.mark.partners_dupes
 def test_empty_inn_not_dupe(fake_base, capsys):
-    """INV-AUDIT-50: пустой ИНН дублем не считается, даже при одинаковом КПП."""
-    _dupe_base(fake_base, [
-        _el("", "770001001", "00E1", "Пусто-1"),
-        _el("", "770001001", "00E2", "Пусто-2"),
-    ])
+    """INV-AUDIT-50: пустой ИНН дублем не считается.
+
+    переписан под spec-hardening (У3): отсев пустого ИНН делает запрос, а не Python.
+    Запрос дублей содержит условие на непустой ИНН, подменная база пустых строк не отдает.
+    """
+    _dupe_base(fake_base, [])
     _, summ, _ = _run(checks_mod.partners, fake_base, capsys)
+    qs = [q for q in fake_base.queries if q.lstrip().startswith(M_DUP)]
+    assert qs, "запрос дублей не выполнялся"
+    assert all(re.search(r"ИНН\s*<>\s*(\"\"|'')", q) for q in qs)
     assert "дубли контрагентов" not in summ
 
 

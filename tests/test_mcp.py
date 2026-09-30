@@ -107,7 +107,7 @@ def _describe(srv, fake_base, fill, enum_raises=False):
         conn = Boom()
     else:
         conn = types.SimpleNamespace(
-            ПроверкаЗаполнения=types.SimpleNamespace(ВыдаватьОшибку=_OK))
+            ПроверкаЗаполнения=types.SimpleNamespace(ВыдаватьОшибку=_OK, НеПроверять=_NO))
     fake_base.c = conn
     fake_base.ПроверкаЗаполнения = conn.ПроверкаЗаполнения if not enum_raises else None
     return srv._describe_sync("catalogs", "Контрагенты")
@@ -124,7 +124,11 @@ def test_ac12_required_true(srv, fake_base):
 
 
 def test_ac12_required_false(srv, fake_base):
-    """AC-12 / INV-AUDIT-90: иное значение -> required false."""
+    """AC-12 / INV-AUDIT-90: значение НеПроверять -> required false.
+
+    переписан под spec-hardening (К-19, AC-5): в подменном системном перечислении
+    есть НеПроверять, false только при равенстве ему, а не при любом "ином".
+    """
     assert _required(_describe(srv, fake_base, _NO))["required"] is False
 
 

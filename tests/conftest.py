@@ -41,12 +41,34 @@ PLAUSIBLE_DOCS = [
 ]
 
 
+class _AnyFinder:
+    """Коллекция, которая "знает все": Найти отдает объект для любого имени."""
+
+    def Найти(self, name):  # noqa: N802
+        return _AnyItem()
+
+
+class _AnyItem:
+    """Объект метаданных с любыми реквизитами и табличными частями."""
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return _AnyFinder()
+
+
 class _Coll(list):
-    """Пустая коллекция метаданных с именем вида (Документы, Справочники)."""
+    """Коллекция метаданных с именем вида (Документы, Справочники).
+
+    Список пуст (names() берется из FakeBase), но Найти знает любое имя (К-17).
+    """
 
     def __init__(self, kind):
         super().__init__()
         self.kind = kind
+
+    def Найти(self, name):  # noqa: N802
+        return _AnyItem()
 
 
 class _Md:
