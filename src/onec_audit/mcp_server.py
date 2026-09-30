@@ -32,7 +32,7 @@
 from __future__ import annotations
 
 import asyncio
-import atexit
+import contextlib
 import datetime as dt
 import functools
 import os
@@ -42,7 +42,10 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable
 
 from mcp.server.mcpserver import MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
+try:
+    from mcp.server.mcpserver.exceptions import ToolError  # mcp 2.x
+except ImportError:  # mcp 1.x
+    from mcp.server.fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 
 try:
@@ -77,7 +80,6 @@ KIND_LIST = ", ".join(KINDS)
 # CoInitialize. Соединение при этом открывается однажды и переиспользуется.
 _pool: ThreadPoolExecutor | None = None
 _base: Base | None = None
-_fill_error: str | None = None  # эталон «Выдавать ошибку» для ПроверкаЗаполнения
 
 
 def _init_com_thread() -> None:
@@ -128,37 +130,57 @@ def _db() -> Base:
     """Соединение, открытое лениво и переиспользуемое."""
     global _base
     if _base is None:
-        _base = _connect()
+        try:
+            _base = _connect()
+        except ToolError:
+            raise
+        except Exception as exc:
+            raise ToolError(f"не удалось подключиться к 1С: {_readable_error(exc)}") from exc
     return _base
 
 
-def _release_com() -> None:
-    """Отпустить соединение. Обязательно на том же потоке, где оно открыто."""
+def _release() -> None:
+    """Отпустить соединение. Повторный вызов безопасен."""
     global _base
-    _base = None  # ссылки на COM-объекты гаснут здесь, на COM-потоке
+    base, _base = _base, None
+    if base is not None:
+        base.close()
+
+
+def _release_com() -> None:
+    """Отпустить соединение и COM-поток. Выполняется на COM-потоке."""
     import pythoncom
 
-    pythoncom.CoUninitialize()
+    try:
+        _release()
+    finally:
+        pythoncom.CoUninitialize()
 
 
-@atexit.register
-def _shutdown() -> None:
-    """Закрыть соединение на COM-потоке и погасить пул.
+def _shutdown_pool() -> None:
+    """Освободить соединение на COM-потоке, затем остановить пул.
 
-    Без этого COM-объекты освобождаются сборщиком мусора на главном потоке,
-    то есть не на том, где были созданы, и на выходе печатается
-    «Win32 exception occurred releasing IUnknown». На работу это не влияет,
-    но в чужом stderr выглядит как поломка.
+    Порядок важен: после остановки пула освободить соединение на его потоке
+    уже нельзя, COM-объекты гаснут на чужом потоке, и на выходе печатается
+    «Win32 exception occurred releasing IUnknown». Повторный вызов безопасен.
     """
     global _pool
-    if _pool is None:
+    pool, _pool = _pool, None
+    if pool is None:
         return
     try:
-        _pool.submit(_release_com).result(timeout=5)
+        pool.submit(_release_com).result(timeout=5)
     except Exception:
         pass
-    _pool.shutdown(wait=True)
-    _pool = None
+    pool.shutdown(wait=True)
+
+
+@contextlib.asynccontextmanager
+async def _lifespan(_server: Any):
+    try:
+        yield
+    finally:
+        _shutdown_pool()
 
 
 # ------------------------------------------------------------- преобразования
@@ -196,33 +218,30 @@ def _type_names(b: Base, attribute: Any) -> list[str]:
         return [b.s(attribute.Тип)]
 
 
-def _is_required(b: Base, attribute: Any) -> bool:
-    """Обязательность = ПроверкаЗаполнения «Выдавать ошибку».
+def _required(b: Base, attribute: Any) -> tuple[bool | None, str | None]:
+    """Обязательность = ПроверкаЗаполнения реквизита равна ВыдаватьОшибку.
 
-    Эталон берётся у самой платформы, а не строкой в коде: представление
-    системного перечисления зависит от языка конфигурации.
+    Эталон берётся у самой платформы (системное перечисление глобального
+    контекста), а не строкой в коде. Не удалось прочитать - (None, пояснение),
+    а не молчаливое False.
     """
-    global _fill_error
-    if _fill_error is None:
-        try:
-            _fill_error = b.s(b.c.ПроверкаЗаполнения.ВыдаватьОшибку)
-        except Exception:
-            _fill_error = ""
-    if not _fill_error:
-        return False
     try:
-        return b.s(attribute.ПроверкаЗаполнения) == _fill_error
-    except Exception:
-        return False
+        return bool(attribute.ПроверкаЗаполнения == b.c.ПроверкаЗаполнения.ВыдаватьОшибку), None
+    except Exception as exc:
+        return None, f"обязательность не прочитана: {_readable_error(exc)}"
 
 
 def _attribute(b: Base, attribute: Any) -> dict[str, Any]:
     """Описание одного реквизита / измерения / ресурса."""
+    types = _type_names(b, attribute)
+    required, note = _required(b, attribute)
     return {
         "name": str(attribute.Имя),
         "synonym": str(attribute.Синоним),
-        "types": _type_names(b, attribute),
-        "required": _is_required(b, attribute),
+        "type": ", ".join(types),
+        "types": types,
+        "required": required,
+        "note": note,
     }
 
 
@@ -249,13 +268,17 @@ def _template_names(owner: Any) -> list[str]:
         return []
 
 
+_RAW_COM = re.compile(r"pywintypes|\(-?\d{6,}\s*,")
+
+
 def _readable_error(exc: Exception) -> str:
-    """Текст ошибки 1С из com_error.
+    """Текст ошибки для человека, без сырого COM-кортежа.
 
     Платформа кладёт внятное сообщение («Поле не найдено "Дата"» с указанием
     места в тексте запроса) глубоко в кортеж excepinfo, а str(com_error)
     показывает лишь «(-2147352567, 'Ошибка.', (...))». Модели нужен именно
-    текст 1С: по нему запрос можно исправить с первой попытки.
+    текст 1С: по нему запрос можно исправить с первой попытки. Если текста
+    1С нет, а в сообщении остался сырой кортеж, отдаём только код.
     """
     excepinfo = getattr(exc, "excepinfo", None)
     if excepinfo:
@@ -265,7 +288,24 @@ def _readable_error(exc: Exception) -> str:
         for item in excepinfo:
             if isinstance(item, str) and item and item != "Ошибка.":
                 return item.strip()
-    return str(exc)
+    text = str(exc)
+    if _RAW_COM.search(text):
+        code = re.search(r"-?\d{6,}", text)
+        return "ошибка COM при обращении к 1С" + (f" (код {code.group()})" if code else "")
+    return text
+
+
+def _tool_errors(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Любая ошибка внутри -> ToolError с читаемым текстом."""
+    @functools.wraps(fn)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return fn(*args, **kwargs)
+        except ToolError:
+            raise
+        except Exception as exc:
+            raise ToolError(_readable_error(exc)) from exc
+    return wrapper
 
 
 def _collection(b: Base, kind: str) -> tuple[Any, str]:
@@ -340,6 +380,7 @@ server = MCPServer(
         "на часовой пояс, и это тихая ошибка без исключения."
     ),
     version="0.1.0",
+    lifespan=_lifespan,
 )
 
 
@@ -384,7 +425,14 @@ async def query(
     return await _in_com(_query_sync, text, params or {}, limit)
 
 
+@_tool_errors
 def _query_sync(text: str, params: dict[str, Any], limit: int) -> dict[str, Any]:
+    for name, value in params.items():  # до обращения к 1С
+        if not isinstance(value, (bool, int, float, str)):
+            raise ToolError(
+                f"параметр {name!r}: допустимы только число, строка, булево, "
+                f"получено {type(value).__name__}. Ссылки задавайте в тексте через ЗНАЧЕНИЕ(...)"
+            )
     b = _db()
     q = b.c.NewObject("Запрос")
     q.Текст = text
@@ -450,6 +498,7 @@ async def list_metadata(kind: str, pattern: str | None = None) -> dict[str, Any]
     return await _in_com(_list_metadata_sync, kind, regex)
 
 
+@_tool_errors
 def _list_metadata_sync(kind: str, regex: re.Pattern[str] | None) -> dict[str, Any]:
     b = _db()
     collection, prefix = _collection(b, kind)
@@ -498,6 +547,7 @@ async def describe(kind: str, name: str) -> dict[str, Any]:
     return await _in_com(_describe_sync, kind, name)
 
 
+@_tool_errors
 def _describe_sync(kind: str, name: str) -> dict[str, Any]:
     b = _db()
     collection, prefix = _collection(b, kind)
@@ -577,8 +627,9 @@ def _describe_sync(kind: str, name: str) -> dict[str, Any]:
         "740 справочников, 437 документов, больше 1300 регистров сведений). "
         "Если нужен не весь вид, отберите имена через list_metadata "
         "и передайте их в full_names.\n\n"
-        "count = -1 означает, что таблица запросом не читается (так бывает "
-        "у служебных объектов), а не что она пуста."
+        "Ответ - словарь по именам: {count, reason}. count = -1 означает, что "
+        "таблица не посчитана (неверное имя, нет в метаданных или запросом не "
+        "читается), причина в reason; это не значит, что она пуста."
     ),
 )
 async def row_counts(
@@ -593,9 +644,34 @@ async def row_counts(
     return await _in_com(_row_counts_sync, full_names or [], kind)
 
 
-def _row_counts_sync(full_names: list[str], kind: str | None) -> dict[str, Any]:
+_TABLE_NAME = re.compile(
+    r"^(Справочник|Документ|РегистрСведений|РегистрНакопления|РегистрБухгалтерии|"
+    r"ПланСчетов|ПланВидовХарактеристик|Перечисление|Константа)\.[A-Za-zА-Яа-яЁё0-9_]+$"
+)
+
+# префикс таблицы в запросе -> коллекция метаданных
+_PREFIX_COLLECTION = {
+    "Справочник": "Справочники",
+    "Документ": "Документы",
+    "РегистрСведений": "РегистрыСведений",
+    "РегистрНакопления": "РегистрыНакопления",
+    "РегистрБухгалтерии": "РегистрыБухгалтерии",
+    "ПланСчетов": "ПланыСчетов",
+    "ПланВидовХарактеристик": "ПланыВидовХарактеристик",
+    "Перечисление": "Перечисления",
+    "Константа": "Константы",
+}
+
+
+def _valid_table_name(name: str) -> bool:
+    """Имя таблицы допустимого вида. Только такое имя попадает в текст запроса."""
+    return isinstance(name, str) and _TABLE_NAME.fullmatch(name) is not None
+
+
+@_tool_errors
+def _row_counts_sync(names: list[str], kind: str | None = None) -> dict[str, dict[str, Any]]:
     b = _db()
-    tables = list(full_names)
+    tables = list(names)
     if kind:
         collection, prefix = _collection(b, kind)
         if not prefix:
@@ -604,20 +680,30 @@ def _row_counts_sync(full_names: list[str], kind: str | None) -> dict[str, Any]:
             )
         tables += [f"{prefix}.{n}" for n in b.names(collection)]
 
-    counts = [{"table": t, "count": b.count(t)} for t in tables]
-    unreadable = [c["table"] for c in counts if c["count"] == -1]
-    return {
-        "counts": counts,
-        "total_rows": sum(c["count"] for c in counts if c["count"] > 0),
-        "unreadable": unreadable,
-        "note": ("count = -1 — таблица не читается запросом, а не пуста"
-                 if unreadable else ""),
-    }
+    result: dict[str, dict[str, Any]] = {}
+    for table in tables:
+        if not _valid_table_name(table):
+            result[table] = {"count": -1, "reason": "недопустимое имя таблицы: "
+                             "ожидается Вид.Имя, например Справочник.Контрагенты"}
+            continue
+        prefix, name = table.split(".", 1)
+        if b.find(getattr(b.md, _PREFIX_COLLECTION[prefix]), name) is None:
+            result[table] = {"count": -1, "reason": "объекта нет в метаданных"}
+            continue
+        count = b.count(table)
+        result[table] = {
+            "count": count,
+            "reason": None if count >= 0 else "таблица не читается запросом",
+        }
+    return result
 
 
 # --------------------------------------------------------------------- запуск
 def main() -> None:
-    server.run("stdio")
+    try:
+        server.run("stdio")
+    finally:
+        _shutdown_pool()
 
 
 if __name__ == "__main__":

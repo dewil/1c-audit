@@ -56,4 +56,6 @@ markers = [
     "closing_balances: остатки закрытия месяца (INV-AUDIT-60)",
     "closing_state: признак месяц закрыт по регламентным операциям (INV-AUDIT-50/60)",
     "bank: обмен с банком по ссылкам (INV-AUDIT-03/05/07/40/41/43/44)",
+    "connection: подключение, разрядность, close (INV-AUDIT-01/14/15/18)",
+    "mcp: MCP-сервер (INV-AUDIT-90/91/92/94)",
 ]

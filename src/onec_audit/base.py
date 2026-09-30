@@ -24,25 +24,55 @@ except ImportError as exc:  # pragma: no cover
 
 
 class BitnessError(RuntimeError):
-    """Разрядность процесса не совпадает с зарегистрированным comcntr.dll."""
+    """Разрядность процесса не совпадает с зарегистрированным comcntr.dll (или коннектора нет)."""
 
 
 class ConnectError(RuntimeError):
     """Не удалось подключиться к базе."""
 
 
-def check_bitness() -> None:
-    """Процесс обязан совпадать по битности с comcntr.dll.
+class _WinRegistry:
+    """Реальный реестр: путь InprocServer32 класса V83.COMConnector в заданном представлении."""
 
-    Несовпадение даёт «Класс не зарегистрирован» — сообщение, которое уводит
-    в сторону: выглядит как отсутствие библиотеки, а на деле разрядность.
-    64-битная платформа 1С — самый частый случай, поэтому проверяем на x64.
+    def inproc_path(self, view_bits: int) -> str | None:
+        import winreg
+
+        view = winreg.KEY_WOW64_64KEY if view_bits == 64 else winreg.KEY_WOW64_32KEY
+        access = winreg.KEY_READ | view
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                r"SOFTWARE\Classes\V83.COMConnector\CLSID", 0, access) as key:
+                clsid = winreg.QueryValueEx(key, "")[0]
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                rf"SOFTWARE\Classes\CLSID\{clsid}\InprocServer32", 0, access) as key:
+                return winreg.QueryValueEx(key, "")[0] or None
+        except OSError:
+            return None
+
+
+def check_bitness(registry: Any = None, process_bits: int | None = None) -> None:
+    """Разрядность проверяется по факту регистрации коннектора, до Dispatch.
+
+    Путь InprocServer32 класса V83.COMConnector читается из представления
+    реестра, совпадающего с разрядностью процесса. Нет там, но есть в другом
+    представлении — коннектор другой разрядности («Класс не зарегистрирован»
+    на деле значит это). Нет нигде — коннектор не зарегистрирован.
     """
-    if struct.calcsize("P") * 8 != 64:
+    if registry is None:
+        registry = _WinRegistry()
+    own = process_bits or struct.calcsize("P") * 8
+    other = 96 - own
+    if registry.inproc_path(own):
+        return
+    if registry.inproc_path(other):
         raise BitnessError(
-            "Нужен 64-битный Python: зарегистрированный comcntr.dll 64-битный. "
-            "Для 32-битной платформы 1С нужен 32-битный Python и её собственный comcntr.dll."
+            f"коннектор зарегистрирован как {other}-битный, а Python {own}-битный. "
+            f"Запустите {other}-битный Python либо зарегистрируйте {own}-битный comcntr.dll."
         )
+    raise BitnessError(
+        "коннектор V83.COMConnector не зарегистрирован. Зарегистрируйте (от администратора):\n"
+        r'  regsvr32 "C:\Program Files\1cv8\<версия>\bin\comcntr.dll"'
+    )
 
 
 def datetime_literal(moment: dt.datetime) -> str:
@@ -134,7 +164,11 @@ class Base:
             conn_string = ""  # строку с паролем не держим
 
         self.description = base or f"{srvr}/{ref}"
-        self.md = self.c.Метаданные
+        try:
+            self.md = self.c.Метаданные
+        except Exception:
+            self.close()  # соединение не должно пережить неудачный __init__
+            raise
 
     # ------------------------------------------------------------ запросы
     def rows(self, text: str, **params: Any) -> Iterator[Any]:
@@ -251,7 +285,9 @@ class Base:
             return "(не определена)"
 
     def close(self) -> None:
+        """Отпустить соединение и метаданные. Повторный вызов безопасен."""
         self.c = None
+        self.md = None
 
     def __enter__(self) -> "Base":
         return self
