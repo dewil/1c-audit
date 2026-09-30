@@ -25,9 +25,11 @@ def resolve_boundary(b, r, opt):
 
 
 def _setup(fake, *, const=True, reg=True, const_value=True,
-           reg_date=datetime(2024, 12, 31), record=True):
+           reg_date=datetime(2024, 12, 31), record=True, enum=True):
     """Подменная база с константой и регистром. Правило константы - первым
     (ее имя содержит имя регистра как подстроку)."""
+    if enum:  # С1: имя перечисления проверяется по метаданным
+        fake.enums["ВидыНазначенияДатЗапрета"] = ["ДляВсехПользователей", "ДляВсехИнформационныхБаз"]
     fake.names_by_kind["Константы"] = [CONST] if const else []
     fake.names_by_kind["РегистрыСведений"] = [REG] if reg else []
     fake.on(CONST, types.SimpleNamespace(Значение=const_value))
@@ -335,3 +337,19 @@ def test_u2_main_param_sets_locked_source(fake_base, patch_base, monkeypatch, ca
     patch_base(fake_base)
     main(["--base", "x", "--locked-before", "2025"])
     assert got == ["параметр"]
+
+
+# ---------- С1: перечисление по метаданным ----------
+@pytest.mark.parametrize("enum_values", [None, ["ДляВсехИнформационныхБаз"]],
+                         ids=["no_enum", "no_value"])
+def test_c1_missing_enum_or_value_means_no_boundary(enum_values, fake_base):
+    """AC-3 / INV-AUDIT-14, INV-AUDIT-03: нет перечисления или значения -> 'не задана', отказа нет."""
+    _setup(fake_base, enum=False)
+    if enum_values is not None:
+        fake_base.enums["ВидыНазначенияДатЗапрета"] = enum_values
+    opt = Options()
+    r = Report(echo=False)
+    resolve_boundary(fake_base, r, opt)
+    assert opt.locked_before is None
+    assert opt.locked_source == "не задана"
+    assert len(r.failures) == 0
