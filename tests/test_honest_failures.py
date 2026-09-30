@@ -86,12 +86,13 @@ def test_ac3_two_distinct_failures_counted_two(capsys):
 
 
 def test_ac5_bank_exchange_one_status_query_fails(fake_base, capsys):
-    """AC-5 / INV-AUDIT-10: упал запрос по одному статусу -> отказ, без вердикта 'нет'."""
+    """AC-5 / INV-AUDIT-10: упал запрос сообщений -> отказ, без вердикта 'нет'.
+
+    переписан под spec-bank, закрепляет то же поведение: вместо запроса на
+    каждый статус - один запрос с маркером `// банк: сообщения`.
+    """
     fake_base.fill_names = True
-    target = fake_base.enums["СтатусыОбменСБанками"][0]
-    fake_base.raise_when(
-        lambda text, params: target in text or target in repr(params)
-    )
+    fake_base.raise_when(lambda text, params: "// банк: сообщения" in text)
     r = Report(echo=True)
     _bank_check()(fake_base, r, Options())
     assert len(r.failures) == 1, "проверка не зарегистрировала отказ"
