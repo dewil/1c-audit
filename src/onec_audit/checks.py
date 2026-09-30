@@ -389,40 +389,50 @@ def partners(b: Base, r: Report, opt: Options) -> None:
     """
     r.head("3. КОНТРАГЕНТЫ")
     try:
-        groups: dict[str, list[dict]] = {}
-        for row in b.rows("""
+        groups: dict[str, dict[str, list[dict]]] = {}
+        for row in b.rows("""// контрагенты: один ИНН
             ВЫБРАТЬ К.ИНН КАК ИНН, К.КПП КАК КПП, К.Код КАК Код, К.Наименование КАК Наим
             ИЗ Справочник.Контрагенты КАК К
-            ГДЕ НЕ К.ПометкаУдаления И К.ИНН В (
+            ГДЕ НЕ К.ПометкаУдаления И НЕ К.ЭтоГруппа И К.ИНН В (
                 ВЫБРАТЬ К2.ИНН ИЗ Справочник.Контрагенты КАК К2
-                ГДЕ К2.ИНН <> "" И НЕ К2.ПометкаУдаления
+                ГДЕ К2.ИНН <> "" И НЕ К2.ПометкаУдаления И НЕ К2.ЭтоГруппа
                 СГРУППИРОВАТЬ ПО К2.ИНН
                 ИМЕЮЩИЕ КОЛИЧЕСТВО(*) > 1)
-            УПОРЯДОЧИТЬ ПО ИНН, Код
+            УПОРЯДОЧИТЬ ПО ИНН, КПП, Код
         """):
-            groups.setdefault(b.s(row.ИНН), []).append(
-                {"кпп": b.s(row.КПП), "код": b.s(row.Код), "наим": b.s(row.Наим)})
+            inn = b.s(row.ИНН)
+            if not inn:
+                continue
+            groups.setdefault(inn, {}).setdefault(b.s(row.КПП), []).append(
+                {"код": b.s(row.Код), "наим": b.s(row.Наим)})
 
-        real = {inn: rs for inn, rs in groups.items() if len({x["кпп"] for x in rs}) == 1}
-        branches = {inn: rs for inn, rs in groups.items() if inn not in real}
+        # Внутри ИНН: подгруппа (ИНН, КПП) из 2+ элементов - дубль, одиночная - филиал.
+        dupes = [(inn, kpp, rs) for inn, by_kpp in groups.items()
+                 for kpp, rs in by_kpp.items() if len(rs) > 1]
+        branches = {inn: [(kpp, rs[0]) for kpp, rs in by_kpp.items() if len(rs) == 1]
+                    for inn, by_kpp in groups.items()}
+        branches = {inn: bs for inn, bs in branches.items() if bs}
 
-        if not real:
+        if not dupes:
             r.w("   настоящих дублей нет (пар с одинаковыми ИНН И КПП не найдено)")
         else:
-            r.w("   ДУБЛИ — совпадают ИНН И КПП:")
-            for inn, rs in real.items():
-                r.w(f"     ИНН {inn}  КПП {rs[0]['кпп']}")
+            r.w("   ДУБЛИ - совпадают ИНН И КПП:")
+            for inn, kpp, rs in dupes:
+                r.w(f"     ИНН {inn}  КПП {kpp}")
                 for x in rs:
                     r.w(f"        код {x['код']:<12} {x['наим']}")
-            r.finding(f"настоящих дублей контрагентов: {len(real)} групп")
+            parts = "; ".join(
+                f"ИНН {inn} КПП {kpp}: " + ", ".join(f"{x['код']} {x['наим']}" for x in rs)
+                for inn, kpp, rs in dupes)
+            r.finding(f"дубли контрагентов: {len(dupes)} групп ({parts})")
 
         if branches:
             r.w()
-            r.w(f"   Не дубли — филиалы (один ИНН, разные КПП): {len(branches)} групп")
-            for inn, rs in branches.items():
+            r.w("   Не дубли - филиалы (один ИНН, разные КПП)")
+            for inn, bs in branches.items():
                 r.w(f"     ИНН {inn}")
-                for x in rs:
-                    r.w(f"        КПП {x['кпп']:<12} код {x['код']:<12} {x['наим']}")
+                for kpp, x in bs:
+                    r.w(f"        КПП {kpp:<12} код {x['код']:<12} {x['наим']}")
     except Exception as exc:
         r.fail(partners.__name__, f"дубли: {exc}")
 
@@ -555,7 +565,6 @@ def month_closing(b: Base, r: Report, opt: Options) -> None:
     unclosed = []
     for year, num in months:
         month = dt.datetime(year, num, 1)
-        end = (month + dt.timedelta(days=32)).replace(day=1) - dt.timedelta(seconds=1)
         total = posted = 0
         failed = False
         try:
@@ -574,14 +583,32 @@ def month_closing(b: Base, r: Report, opt: Options) -> None:
 
         residue, residue_failed = [], False
         try:
-            for row in b.rows(f"""
-                ВЫБРАТЬ Ост.Счет.Код КАК Код, Ост.СуммаОстатокДт КАК Дт
-                ИЗ РегистрБухгалтерии.Хозрасчетный.Остатки({datetime_literal(end)}, , , ) КАК Ост
-                ГДЕ Ост.СуммаОстатокДт <> 0
+            # Остаток на конец месяца = на начало следующего: момент 23:59:59
+            # последнего дня проводки этой секунды не включает.
+            ny, nm = (year + 1, 1) if num == 12 else (year, num + 1)
+            nxt = f"ДАТАВРЕМЯ({ny}, {nm}, 1, 0, 0, 0)"
+            # Группировка по Ост.Счет (не по Ост.Счет.Код - INV-AUDIT-60), затем
+            # субсчета сворачиваются в счет верхнего уровня из перечня.
+            for row in b.rows(f"""// закрытие: остатки
+                ВЫБРАТЬ Ост.Счет.Код КАК Код, СУММА(Ост.СуммаОстатокДт) КАК Дт
+                ПОМЕСТИТЬ ОстПоСчетам
+                ИЗ РегистрБухгалтерии.Хозрасчетный.Остатки({nxt}, , , ) КАК Ост
+                СГРУППИРОВАТЬ ПО Ост.Счет;
+                ВЫБРАТЬ
+                    ВЫБОР КОГДА ПОДСТРОКА(О.Код, 1, 5) = "90.09" ТОГДА "90.09"
+                          ИНАЧЕ ПОДСТРОКА(О.Код, 1, 2) КОНЕЦ КАК Код,
+                    СУММА(О.Дт) КАК Сумма
+                ИЗ ОстПоСчетам КАК О
+                ГДЕ ПОДСТРОКА(О.Код, 1, 5) = "90.09"
+                    ИЛИ (ПОДСТРОКА(О.Код, 1, 2) В ("20", "25", "26", "44")
+                         И (ДЛИНАСТРОКИ(О.Код) = 2 ИЛИ ПОДСТРОКА(О.Код, 3, 1) = "."))
+                СГРУППИРОВАТЬ ПО
+                    ВЫБОР КОГДА ПОДСТРОКА(О.Код, 1, 5) = "90.09" ТОГДА "90.09"
+                          ИНАЧЕ ПОДСТРОКА(О.Код, 1, 2) КОНЕЦ
+                ИМЕЮЩИЕ СУММА(О.Дт) <> 0
+                УПОРЯДОЧИТЬ ПО Код
             """):
-                acc = b.s(row.Код)
-                if acc.startswith(("20", "25", "26", "44", "90.09")):
-                    residue.append(f"{acc} {money(row.Дт)}")
+                residue.append(f"{b.s(row.Код)} {money(row.Сумма)}")
         except Exception as exc:
             r.fail(month_closing.__name__, f"остатки {month:%Y-%m}: {exc}")
             residue_failed = True
