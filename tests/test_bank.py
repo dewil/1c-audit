@@ -109,10 +109,10 @@ def test_orphan_lookup_params_inn_and_sum_not_float(fake_base, capsys):
 
 
 def test_linked_payment_does_not_query_by_requisites(fake_base, capsys):
-    """AC-1/AC-2 / INV-AUDIT-05: реквизитный запрос нужен только сироте."""
+    """AC-1 / INV-AUDIT-05, У5: связанная платежка со списанием по основанию - реквизитного запроса нет."""
     seen = []
     fake_base.on(lambda t, p: seen.append(t) if BY_REQ in t else False, None)
-    _run(fake_base, [_row(), _row(Списано=True)], capsys)
+    _run(fake_base, [_row(Списано=True)], capsys)
     assert seen == []
 
 
@@ -248,3 +248,53 @@ def test_mixed_groups_summary_only_attention(fake_base, capsys):
     assert "ОК-1" not in summ and "Оплачено ООО" not in summ
     assert "ВЫП-3" not in summ and "Выписка ООО" not in summ
     assert f"{SUMMARY_PREFIX}: 1" in summ
+
+
+def test_u5_linked_without_base_but_found_by_requisites(fake_base, capsys):
+    """У5 / INV-AUDIT-08: связана, Списано=False, поиск нашел списание -> 'деньги ушли' с 'без основания', не в сводке."""
+    found = types.SimpleNamespace(Дата=datetime(2026, 3, 2), Номер="36")
+    body, summ, r = _run(fake_base, [_row()], capsys, by_req=found)
+    assert "деньги ушли" in body
+    assert "без основания" in body
+    assert "36" in body and "2026-03-02" in body
+    assert SUMMARY_PREFIX not in summ
+    assert r.exit_code() == 0
+
+
+def test_u5_linked_without_base_not_found_is_attention(fake_base, capsys):
+    """У5 / INV-AUDIT-08: связана, Списано=False, поиск ничего не нашел -> 'требует внимания', в сводке."""
+    body, summ, r = _run(fake_base, [_row()], capsys, by_req=None)
+    assert "без основания" not in body
+    assert SUMMARY_PREFIX in summ and "ПП-77" in summ
+    assert r.exit_code() == 1
+
+
+def test_u6_empty_inn_no_lookup_attention(fake_base, capsys):
+    """У6 / INV-AUDIT-08: пустой ИНН -> запроса по реквизитам нет, 'требует внимания' с 'нет ИНН получателя'."""
+    seen = []
+    fake_base.on(lambda t, p: seen.append(t) if BY_REQ in t else False, None)
+    rows = [_orphan(ИНН="", Номер="СИР-1"), _row(ИНН=None, ПлатежкаНомер="ПП-55")]
+    body, summ, r = _run(fake_base, rows, capsys)
+    assert seen == []
+    assert "нет ИНН получателя" in body
+    assert SUMMARY_PREFIX in summ
+    assert "ПП-55" in summ
+    assert len(r.failures) == 0
+
+
+def test_u7_lookup_fails_for_both_one_failure_both_attention(fake_base, capsys):
+    """У7 / INV-AUDIT-10: поиск падает на обоих -> один отказ, оба сообщения в 'требует внимания' (не остановка на первом)."""
+    fake_base.fill_names = True
+    fake_base.raise_when(lambda t, p: BY_REQ in t)
+    fake_base.on(MSG, [_orphan(Номер="СИР-1", Контр="Первый ООО"),
+                       _orphan(Номер="СИР-2", Контр="Второй ООО")])
+    r = Report(echo=True)
+    capsys.readouterr()
+    bank_exchange(fake_base, r, Options())
+    body = capsys.readouterr().out
+    r.summary()
+    summ = capsys.readouterr().out
+    assert len(r.failures) == 1
+    assert "СИР-1" in body and "СИР-2" in body
+    assert "Первый ООО" in summ and "Второй ООО" in summ
+    assert sum(1 for q in fake_base.queries if BY_REQ in q) == 2
