@@ -87,6 +87,7 @@ def test_ac3_two_distinct_failures_counted_two(capsys):
 
 def test_ac5_bank_exchange_one_status_query_fails(fake_base, capsys):
     """AC-5 / INV-AUDIT-10: упал запрос по одному статусу -> отказ, без вердикта 'нет'."""
+    fake_base.fill_names = True
     target = fake_base.enums["СтатусыОбменСБанками"][0]
     fake_base.raise_when(
         lambda text, params: target in text or target in repr(params)
@@ -108,6 +109,7 @@ def test_ac5_bank_exchange_all_queries_fail(fake_base, capsys):
 
 def test_bank_exchange_no_enum_is_failure(fake_base, capsys):
     """INV-AUDIT-10 (правило про перечисление): нет СтатусыОбменСБанками -> не выполнено."""
+    fake_base.fill_names = True
     fake_base.enums = {}
     r = Report(echo=True)
     _bank_check()(fake_base, r, Options())
@@ -237,6 +239,7 @@ def test_ac10_failure_beats_finding(fake_base, patch_base, monkeypatch):
 
 def test_ac11_status_missing_in_metadata_is_skipped_not_failed(fake_base, capsys):
     """AC-11 / INV-AUDIT-10: нет статуса в метаданных -> проверка выполнена, пометка о пропуске."""
+    fake_base.fill_names = True
     fake_base.enums = {"СтатусыОбменСБанками": ["ОтклоненБанком", "Сформирован"]}
     r = Report(echo=True)
     _bank_check()(fake_base, r, Options())
@@ -244,3 +247,12 @@ def test_ac11_status_missing_in_metadata_is_skipped_not_failed(fake_base, capsys
     assert len(r.failures) == 0
     assert "пропущен" in out
     assert "Приостановлен" in out  # У2: имя пропущенного статуса
+
+
+def test_u6_no_bank_document_means_not_used_not_failure(fake_base, capsys):
+    """У6 / INV-AUDIT-10: нет документа СообщениеОбменСБанками -> выполнена, 'не используется'."""
+    fake_base.fill_names = False  # names() пуст: документа нет
+    r = Report(echo=True)
+    _bank_check()(fake_base, r, Options())
+    assert len(r.failures) == 0
+    assert "не используется" in capsys.readouterr().out

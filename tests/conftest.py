@@ -35,6 +35,20 @@ class _Enums:
         )
 
 
+PLAUSIBLE_DOCS = [
+    "РеализацияТоваровУслуг", "СчетНаОплатуПокупателю",
+    "РегламентнаяОперация", "СообщениеОбменСБанками",
+]
+
+
+class _Coll(list):
+    """Пустая коллекция метаданных с именем вида (Документы, Справочники)."""
+
+    def __init__(self, kind):
+        super().__init__()
+        self.kind = kind
+
+
 class _Md:
     """Метаданные: Перечисления работают по контракту, остальное - пустые коллекции."""
 
@@ -42,7 +56,7 @@ class _Md:
         self.Перечисления = _Enums(enums)
 
     def __getattr__(self, name):
-        return []
+        return _Coll(name)
 
 
 class FakeBase:
@@ -64,6 +78,7 @@ class FakeBase:
         self.platform_value = "8.3.0.0"
         self.raise_on: set[str] = set()  # имена шапки: config_synonym, ...
         self.queries: list[str] = []
+        self.fill_names = False
 
     # --- настройка ---
     def on(self, match, result):
@@ -111,6 +126,16 @@ class FakeBase:
 
     # Вспомогательные методы Base (в контракте спеки не перечислены).
     def names(self, collection):
+        # По умолчанию метаданные пусты. В режиме "бросать на всё" или при
+        # fill_names=True отдаются правдоподобные имена (У7), чтобы проверки
+        # дошли до запросов.
+        if not (self.raise_all or self.fill_names):
+            return []
+        kind = getattr(collection, "kind", "")
+        if kind == "Документы":
+            return list(PLAUSIBLE_DOCS)
+        if kind == "Справочники":
+            return ["Контрагенты"]
         return []
 
     def find(self, collection, name):
