@@ -86,12 +86,13 @@ def test_ac3_two_distinct_failures_counted_two(capsys):
 
 
 def test_ac5_bank_exchange_one_status_query_fails(fake_base, capsys):
-    """AC-5 / INV-AUDIT-10: упал запрос по одному статусу -> отказ, без вердикта 'нет'."""
+    """AC-5 / INV-AUDIT-10: упал запрос сообщений -> отказ, без вердикта 'нет'.
+
+    переписан под spec-bank, закрепляет то же поведение: вместо запроса на
+    каждый статус - один запрос с маркером `// банк: сообщения`.
+    """
     fake_base.fill_names = True
-    target = fake_base.enums["СтатусыОбменСБанками"][0]
-    fake_base.raise_when(
-        lambda text, params: target in text or target in repr(params)
-    )
+    fake_base.raise_when(lambda text, params: "// банк: сообщения" in text)
     r = Report(echo=True)
     _bank_check()(fake_base, r, Options())
     assert len(r.failures) == 1, "проверка не зарегистрировала отказ"
@@ -239,8 +240,10 @@ def test_ac10_failure_beats_finding(fake_base, patch_base, monkeypatch):
 
 def test_ac11_status_missing_in_metadata_is_skipped_not_failed(fake_base, capsys):
     """AC-11 / INV-AUDIT-10: нет статуса в метаданных -> проверка выполнена, пометка о пропуске."""
-    fake_base.fill_names = True
-    fake_base.enums = {"СтатусыОбменСБанками": ["ОтклоненБанком", "Сформирован"]}
+    # переписан под spec-bank С2, закрепляет то же поведение
+    from test_bank import _meta
+    _meta(fake_base)
+    fake_base.enums["СтатусыОбменСБанками"] = ["ОтклоненБанком", "Сформирован"]
     r = Report(echo=True)
     _bank_check()(fake_base, r, Options())
     out = capsys.readouterr().out
