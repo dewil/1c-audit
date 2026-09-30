@@ -68,6 +68,7 @@ def unposted_documents(b: Base, r: Report, opt: Options) -> None:
 
     year_floor = opt.locked_before or 1
     rows = []
+    failed = False
     for name in scan:
         try:
             row = b.one(
@@ -81,7 +82,9 @@ def unposted_documents(b: Base, r: Report, opt: Options) -> None:
                 """,
                 Год=year_floor,
             )
-        except Exception:
+        except Exception as exc:
+            r.fail(unposted_documents.__name__, f"{name}: {exc}")
+            failed = True
             continue
         if not row or not row.Непров:
             continue
@@ -94,7 +97,8 @@ def unposted_documents(b: Base, r: Report, opt: Options) -> None:
     anomalous = [x for x in rows if x not in structural]
 
     if not anomalous:
-        r.w("   непроведённых документов нет")
+        if not failed:
+            r.w("   непроведённых документов нет")
     else:
         r.w(f"   {'Тип документа':<38}{'всего':>8}{'непров.':>10}{'в открытом':>12}")
         for x in sorted(anomalous, key=lambda v: -v["непров"]):
@@ -164,7 +168,8 @@ def _unposted_sales_detail(b: Base, r: Report, opt: Options, anomalous: list) ->
                 )
                 if hit:
                     paid = f"ДА {hit.Дата:%Y-%m-%d}"
-            except Exception:
+            except Exception as exc:
+                r.fail(unposted_documents.__name__, f"поиск оплаты {doc}: {exc}")
                 paid = "?"
             if not paid:
                 paid = "НЕТ"
@@ -207,6 +212,14 @@ def bank_exchange(b: Base, r: Report, opt: Options) -> None:
         r.w("   обмен с банками в этой конфигурации не используется")
         return
 
+    # Статусы берём из метаданных, не угадываем: см. Base.find().
+    enum = b.md.Перечисления.Найти("СтатусыОбменСБанками")
+    if enum is None:
+        r.fail(bank_exchange.__name__, "в метаданных нет перечисления СтатусыОбменСБанками")
+        return
+    values = enum.ЗначенияПеречисления
+    known = {values.Получить(i).Имя for i in range(values.Количество())}
+
     pp_keys: dict[tuple[int, int], str] = {}
     if "ПлатежноеПоручение" in doc_names:
         for row in b.rows(
@@ -218,8 +231,11 @@ def bank_exchange(b: Base, r: Report, opt: Options) -> None:
             if tail.isdigit():
                 pp_keys[(row.Дата.year, int(tail))] = raw
 
-    orphans, any_live = [], False
+    orphans, any_live, failed = [], False, False
     for status in BAD_STATUSES:
+        if status not in known:
+            r.w(f"   {status}: пропущен — такого значения нет в перечислении")
+            continue
         try:
             # Сравнение с ЗНАЧЕНИЕ() и текст через ПРЕДСТАВЛЕНИЕ() делает 1С:
             # перечисление приезжает в Python объектом, а не строкой.
@@ -241,7 +257,8 @@ def bank_exchange(b: Base, r: Report, opt: Options) -> None:
                 """, Год=opt.since_year)
             ]
         except Exception as exc:
-            r.w(f"   {status}: не удалось — {exc}")
+            r.fail(bank_exchange.__name__, f"{status}: {exc}")
+            failed = True
             continue
         if not msgs:
             continue
@@ -264,7 +281,7 @@ def bank_exchange(b: Base, r: Report, opt: Options) -> None:
         if total:
             r.finding(f"обмен с банком, статус {status}: {len(live)} шт на {money(total)}")
 
-    if not any_live:
+    if not any_live and not failed:
         r.w("   незавершённых сообщений, требующих внимания, нет")
 
     if orphans:
@@ -326,7 +343,7 @@ def partners(b: Base, r: Report, opt: Options) -> None:
                 for x in rs:
                     r.w(f"        КПП {x['кпп']:<12} код {x['код']:<12} {x['наим']}")
     except Exception as exc:
-        r.w(f"   дубли: не удалось — {exc}")
+        r.fail(partners.__name__, f"дубли: {exc}")
 
     try:
         row = b.one('ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК N ИЗ Справочник.Контрагенты '
@@ -335,8 +352,8 @@ def partners(b: Base, r: Report, opt: Options) -> None:
         r.w(f"   без ИНН: {n}")
         if n:
             r.finding(f"контрагентов без ИНН: {n}")
-    except Exception:
-        pass
+    except Exception as exc:
+        r.fail(partners.__name__, f"без ИНН: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -359,24 +376,26 @@ def balances(b: Base, r: Report, opt: Options) -> None:
         if not seen:
             r.w("   остатков нет")
     except Exception as exc:
-        r.w(f"   не удалось — {exc}")
+        r.fail(balances.__name__, str(exc))
 
 
 # ---------------------------------------------------------------------------
 def marked_for_deletion(b: Base, r: Report, opt: Options) -> None:
     """Объекты, помеченные на удаление."""
     r.head("5. ПОМЕЧЕННЫЕ НА УДАЛЕНИЕ")
-    marked = []
+    marked, failed = [], False
     for coll, prefix in ((b.md.Справочники, "Справочник"), (b.md.Документы, "Документ")):
         for name in b.names(coll):
             try:
                 row = b.one(f"ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК N ИЗ {prefix}.{name} ГДЕ ПометкаУдаления")
                 if row and int(row.N):
                     marked.append((f"{prefix}.{name}", int(row.N)))
-            except Exception:
-                continue
+            except Exception as exc:
+                r.fail(marked_for_deletion.__name__, f"{prefix}.{name}: {exc}")
+                failed = True
     if not marked:
-        r.w("   помеченных нет")
+        if not failed:
+            r.w("   помеченных нет")
         return
     for obj, n in sorted(marked, key=lambda v: -v[1]):
         r.w(f"   {obj:<56}{n:>6}")
@@ -411,6 +430,7 @@ def month_closing(b: Base, r: Report, opt: Options) -> None:
     while month <= last:
         end = (month + dt.timedelta(days=32)).replace(day=1) - dt.timedelta(seconds=1)
         total = posted = 0
+        failed = False
         try:
             # ГОД/МЕСЯЦ целыми: дат в параметрах нет, значит нет и сдвига пояса.
             row = b.one("""
@@ -421,10 +441,11 @@ def month_closing(b: Base, r: Report, opt: Options) -> None:
             """, Г=month.year, М=month.month)
             if row:
                 total, posted = int(row.N or 0), int(row.P or 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            r.fail(month_closing.__name__, f"{month:%Y-%m}: {exc}")
+            failed = True
 
-        residue = []
+        residue, residue_failed = [], False
         try:
             for row in b.rows(f"""
                 ВЫБРАТЬ Ост.Счет.Код КАК Код, Ост.СуммаОстатокДт КАК Дт
@@ -434,10 +455,13 @@ def month_closing(b: Base, r: Report, opt: Options) -> None:
                 acc = b.s(row.Код)
                 if acc.startswith(("20", "25", "26", "44", "90.09")):
                     residue.append(f"{acc} {money(row.Дт)}")
-        except Exception:
-            pass
+        except Exception as exc:
+            r.fail(month_closing.__name__, f"остатки {month:%Y-%m}: {exc}")
+            residue_failed = True
 
-        if total == 0:
+        if failed:
+            state = "НЕ ПРОВЕРЕН — запрос не выполнен"
+        elif total == 0:
             state = "НЕ ЗАКРЫВАЛСЯ — операций нет"
         elif posted == 0:
             state = "НЕ ЗАКРЫТ — операции есть, ни одна не проведена"
@@ -448,8 +472,11 @@ def month_closing(b: Base, r: Report, opt: Options) -> None:
         if residue and state != "закрыт":
             state += "  [" + "; ".join(residue) + "]"
 
+        bad = state != "закрыт" and not failed
+        if residue_failed:
+            state = "остатки не проверены" if state == "закрыт" else state + "  [остатки не проверены]"
         r.w(f"   {month:%Y-%m}   {total:>9}{posted:>11}   {state}")
-        if state != "закрыт":
+        if bad:
             unclosed.append(month)
         month = (month + dt.timedelta(days=32)).replace(day=1)
 

@@ -44,3 +44,10 @@ Issues = "https://github.com/dewil/1c-audit/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/onec_audit"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+    "honest_failures: честные отказы и коды выхода (INV-AUDIT-10/11/14/18)",
+]
