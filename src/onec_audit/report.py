@@ -10,6 +10,9 @@ def money(value: Any) -> str:
     return f"{float(value or 0):,.2f}".replace(",", " ").replace(".", ",")
 
 
+READ_ONLY_LINE = "Данные учёта не изменялись: только запросы на чтение."
+
+
 class Report:
     """Строки отчёта плюс отдельный список находок.
 
@@ -55,7 +58,7 @@ class Report:
             return 4
         return 1 if self.findings else 0
 
-    def summary(self) -> None:
+    def summary(self, elapsed: float | None = None) -> None:
         self.w()
         self.rule("=")
         self.w("ЧТО ПОСМОТРЕТЬ")
@@ -68,6 +71,10 @@ class Report:
             self.w("   ничего требующего внимания не найдено")
         for i, text in enumerate(self.findings, 1):
             self.w(f"   {i}. {text}")
+        self.w()
+        if elapsed is not None:
+            self.w(f"Время выполнения: {elapsed:.0f} с.")
+        self.w(READ_ONLY_LINE)
 
     def save(self, path: str) -> None:
         with open(path, "w", encoding="utf-8-sig", newline="\r\n") as fh:

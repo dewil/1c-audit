@@ -57,13 +57,6 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _close(base) -> None:
-    try:
-        base.close()
-    except Exception as exc:  # закрытие не меняет результат прогона
-        print(f"ПРЕДУПРЕЖДЕНИЕ: не удалось закрыть соединение: {exc}", file=sys.stderr)
-
-
 def main(argv: list[str] | None = None) -> int:
     # консоль Windows (cp1251) не умеет часть символов отчёта, например «−»
     if hasattr(sys.stdout, "reconfigure"):
@@ -90,68 +83,67 @@ def main(argv: list[str] | None = None) -> int:
     report = Report(echo=not args.quiet)
     try:
         base = Base(args.base, srvr=args.srvr, ref=args.ref, user=args.user)
-    except (BitnessError, ValueError) as exc:
+    except BitnessError as exc:
+        print(f"STOP: {exc}", file=sys.stderr)
+        return 5
+    except ValueError as exc:
         print(f"STOP: {exc}", file=sys.stderr)
         return 2
     except Exception as exc:
         print(f"STOP: {exc}", file=sys.stderr)
         return 3
 
-    try:  # шапку читаем до печати: при ошибке отчёт не начинается
-        config = f"{base.config_synonym}  {base.config_version}"
-        platform = base.platform_version()
-    except Exception as exc:
-        print(f"STOP: не удалось прочитать шапку базы: {exc}", file=sys.stderr)
-        _close(base)
-        return 3
+    with base:
+        try:  # шапку читаем до печати: при ошибке отчёт не начинается
+            config = f"{base.config_synonym}  {base.config_version}"
+            platform = base.platform_version()
+        except Exception as exc:
+            print(f"STOP: не удалось прочитать шапку базы: {exc}", file=sys.stderr)
+            return 3
 
-    options = Options(
-        since_year=args.since_year,
-        locked_before=args.locked_before,
-    )
-    if args.locked_before is not None:
-        options.locked_source = "параметр"
+        options = Options(
+            since_year=args.since_year,
+            locked_before=args.locked_before,
+        )
+        if args.locked_before is not None:
+            options.locked_source = "параметр"
 
-    code = 4  # что бы ни случилось после начала отчёта, это не «чисто»
-    try:
-        started = dt.datetime.now()
-        report.rule("=")
-        report.w(f"ДИАГНОСТИКА 1С — {started:%Y-%m-%d %H:%M}")
-        report.rule("=")
-        report.w(f"База        : {base.description}")
-        report.w(f"Конфигурация: {config}")
-        report.w(f"Платформа   : {platform}")
-        resolve_boundary(base, report, options)
-        report.w("Граница     : " + (
-            f"{options.locked_before:%d.%m.%Y} ({options.locked_source})"
-            if options.locked_before is not None else "не задана"))
+        code = 4  # что бы ни случилось после начала отчёта, это не «чисто»
+        try:
+            started = dt.datetime.now()
+            report.rule("=")
+            report.w(f"ДИАГНОСТИКА 1С — {started:%Y-%m-%d %H:%M}")
+            report.rule("=")
+            report.w(f"База        : {base.description}")
+            report.w(f"Конфигурация: {config}")
+            report.w(f"Платформа   : {platform}")
+            resolve_boundary(base, report, options)
+            report.w("Граница     : " + (
+                f"{options.locked_before:%d.%m.%Y} ({options.locked_source})"
+                if options.locked_before is not None else "не задана"))
 
-        for check in ALL_CHECKS:
-            try:
-                check(base, report, options)
-            except Exception as exc:  # одна упавшая проверка не должна ронять отчёт
-                report.w()
-                report.fail(check.__name__, str(exc))
+            for check in ALL_CHECKS:
+                try:
+                    check(base, report, options)
+                except Exception as exc:  # одна упавшая проверка не должна ронять отчёт
+                    report.w()
+                    report.fail(check.__name__, str(exc))
 
-        report.summary()
-        report.w()
-        report.w(f"Время выполнения: {(dt.datetime.now() - started).total_seconds():.0f} с. "
-                 "Записано в базу: НИЧЕГО.")
+            # хвост: сводка, время выполнения, обещание «только чтение» последней
+            report.summary((dt.datetime.now() - started).total_seconds())
 
-        code = report.exit_code()
-        if args.out:
-            try:
-                report.save(args.out)
-                if not args.quiet:
-                    print(f"\nОтчёт сохранён: {args.out}")
-            except Exception as exc:
-                print(f"STOP: не удалось сохранить отчёт: {exc}", file=sys.stderr)
-                code = 4
-    except Exception as exc:
-        print(f"STOP: сбой при выводе отчёта: {exc}", file=sys.stderr)
-
-    _close(base)
-    return code
+            code = report.exit_code()
+            if args.out:
+                try:
+                    report.save(args.out)
+                    if not args.quiet:
+                        print(f"\nОтчёт сохранён: {args.out}")
+                except Exception as exc:
+                    print(f"STOP: не удалось сохранить отчёт: {exc}", file=sys.stderr)
+                    code = 4
+        except Exception as exc:
+            print(f"STOP: сбой при выводе отчёта: {exc}", file=sys.stderr)
+        return code
 
 
 if __name__ == "__main__":
