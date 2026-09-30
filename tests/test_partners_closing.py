@@ -142,6 +142,7 @@ def test_ac4_dupe_query_fails_partners_fails_noinn_printed(fake_base, capsys):
 
 # ---------- Корень 2: closing_balances ----------
 def _closing_queries(fake_base, capsys, year, month, rows=()):
+    fake_base.names_by_kind["Документы"] = ["РегламентнаяОперация"]  # INV-AUDIT-14
     fake_base.on(_m(M_BAL), list(rows))
     _run(checks_mod.month_closing, fake_base, capsys,
          locked_before=date(year, month, 1))
@@ -171,7 +172,8 @@ def test_ac5_next_month_start_literal(ym, literal, fake_base, capsys, monkeypatc
 def test_ac6_one_row_per_account_one_fragment(fake_base, capsys, monkeypatch):
     """AC-6 / INV-AUDIT-60: запрос отдал одну строку по 20 -> ровно один фрагмент '20 <сумма>'."""
     _month_only(monkeypatch, (2025, 3))
-    fake_base.on(_m(M_BAL), [ns(Код="20", Сумма=1500.0)])
+    fake_base.names_by_kind["Документы"] = ["РегламентнаяОперация"]  # INV-AUDIT-14
+    fake_base.on(_m(M_BAL), [ns(Код="20", Сумма=1234.56)])
     body, _, _ = _run(checks_mod.month_closing, fake_base, capsys,
                       locked_before=date(2025, 3, 1))
     # У4: фрагменты в квадратных скобках через '; ', сумма в формате money()
