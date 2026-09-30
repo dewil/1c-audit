@@ -240,8 +240,10 @@ def test_ac10_failure_beats_finding(fake_base, patch_base, monkeypatch):
 
 def test_ac11_status_missing_in_metadata_is_skipped_not_failed(fake_base, capsys):
     """AC-11 / INV-AUDIT-10: нет статуса в метаданных -> проверка выполнена, пометка о пропуске."""
-    fake_base.fill_names = True
-    fake_base.enums = {"СтатусыОбменСБанками": ["ОтклоненБанком", "Сформирован"]}
+    # переписан под spec-bank С2, закрепляет то же поведение
+    from test_bank import _meta
+    _meta(fake_base)
+    fake_base.enums["СтатусыОбменСБанками"] = ["ОтклоненБанком", "Сформирован"]
     r = Report(echo=True)
     _bank_check()(fake_base, r, Options())
     out = capsys.readouterr().out
