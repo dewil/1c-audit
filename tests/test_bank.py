@@ -40,8 +40,22 @@ def _orphan(**kw):
     return _row(Платежка=None, ПлатежкаНомер=None, **kw)
 
 
+def _meta(fake, *, docs=("ПлатежноеПоручение", "СписаниеСРасчетногоСчета", "СообщениеОбменСБанками"),
+          register=True, enum=True, enum_value=True):
+    """С2: метаданные банковского сценария в подменной базе (по умолчанию все на месте)."""
+    fake.names_by_kind["Документы"] = list(docs)
+    fake.names_by_kind["РегистрыСведений"] = (
+        ["СвязанныеОбъектыОбменСБанками"] if register else [])
+    if enum:
+        fake.enums["ВидыЭДОбменСБанками"] = (
+            ["ПлатежноеПоручение"] if enum_value else ["ВыпискаБанка"])
+    else:
+        fake.enums.pop("ВидыЭДОбменСБанками", None)
+    return fake
+
+
 def _run(fake, rows, capsys, *, by_req=None, opt=None):
-    fake.fill_names = True
+    _meta(fake)
     fake.on(BY_REQ, by_req)  # первым: маркер реквизитного запроса
     fake.on(MSG, rows)
     r = Report(echo=True)
@@ -190,7 +204,7 @@ def test_ac8_disclaimer_in_section(fake_base, capsys):
 
 def test_ac9_messages_query_failure_is_failure(fake_base, capsys):
     """AC-9 / INV-AUDIT-10: отказ запроса сообщений -> отказ, вердикта 'нет' нет."""
-    fake_base.fill_names = True
+    _meta(fake_base)
     fake_base.raise_when(lambda t, p: MSG in t)
     r = Report(echo=True)
     bank_exchange(fake_base, r, Options())
@@ -201,7 +215,7 @@ def test_ac9_messages_query_failure_is_failure(fake_base, capsys):
 
 def test_ac9_requisites_query_failure_is_failure_and_attention(fake_base, capsys):
     """AC-9 / INV-AUDIT-10, У3: отказ реквизитного запроса -> отказ проверки, сирота в 'требует внимания'."""
-    fake_base.fill_names = True
+    _meta(fake_base)
     fake_base.raise_when(lambda t, p: BY_REQ in t)
     fake_base.on(MSG, [_orphan(Номер="СИР-9")])
     r = Report(echo=True)
@@ -284,7 +298,7 @@ def test_u6_empty_inn_no_lookup_attention(fake_base, capsys):
 
 def test_u7_lookup_fails_for_both_one_failure_both_attention(fake_base, capsys):
     """У7 / INV-AUDIT-10: поиск падает на обоих -> один отказ, оба сообщения в 'требует внимания' (не остановка на первом)."""
-    fake_base.fill_names = True
+    _meta(fake_base)
     fake_base.raise_when(lambda t, p: BY_REQ in t)
     fake_base.on(MSG, [_orphan(Номер="СИР-1", Контр="Первый ООО"),
                        _orphan(Номер="СИР-2", Контр="Второй ООО")])
@@ -298,3 +312,75 @@ def test_u7_lookup_fails_for_both_one_failure_both_attention(fake_base, capsys):
     assert "СИР-1" in body and "СИР-2" in body
     assert "Первый ООО" in summ and "Второй ООО" in summ
     assert sum(1 for q in fake_base.queries if BY_REQ in q) == 2
+
+
+def test_s2_no_links_register_orphan_branch_no_failure(fake_base, capsys):
+    """С2 / INV-AUDIT-10: нет регистра связей -> ПП-сообщения по ветке сирот, отказа нет."""
+    _meta(fake_base, register=False)
+    fake_base.on(BY_REQ, types.SimpleNamespace(Дата=datetime(2026, 1, 9)))
+    fake_base.on(MSG, [_orphan(Номер="СИР-9")])
+    r = Report(echo=True)
+    capsys.readouterr()
+    bank_exchange(fake_base, r, Options())
+    body = capsys.readouterr().out
+    assert len(r.failures) == 0
+    assert "платежку удалили и пересоздали" in body
+    assert "СИР-9" in body
+
+
+def test_s2_no_links_register_orphan_without_payment_attention(fake_base, capsys):
+    """С2 / INV-AUDIT-05: нет регистра связей, списания нет -> 'платежка удалена, списания не найдено', отказа нет."""
+    _meta(fake_base, register=False)
+    fake_base.on(BY_REQ, None)
+    fake_base.on(MSG, [_orphan()])
+    r = Report(echo=True)
+    bank_exchange(fake_base, r, Options())
+    r.summary()
+    assert len(r.failures) == 0
+    assert SUMMARY_PREFIX in capsys.readouterr().out
+
+
+def test_s2_no_kinds_enum_is_failure_with_reason(fake_base, capsys):
+    """С2 / INV-AUDIT-10: нет перечисления ВидыЭДОбменСБанками -> отказ с понятной причиной, без вердикта 'нет'."""
+    _meta(fake_base, enum=False)
+    fake_base.on(MSG, [])
+    r = Report(echo=True)
+    capsys.readouterr()
+    bank_exchange(fake_base, r, Options())
+    out = capsys.readouterr().out
+    r.summary()
+    out += capsys.readouterr().out
+    assert len(r.failures) == 1
+    assert "ВидыЭДОбменСБанками" in out
+    assert BANK_CLEAN not in out
+
+
+def test_s2_no_pp_value_in_kinds_enum_is_failure(fake_base, capsys):
+    """С2 / INV-AUDIT-10: в перечислении нет значения ПлатежноеПоручение -> отказ с причиной."""
+    _meta(fake_base, enum_value=False)
+    fake_base.on(MSG, [])
+    r = Report(echo=True)
+    capsys.readouterr()
+    bank_exchange(fake_base, r, Options())
+    r.summary()
+    out = capsys.readouterr().out
+    assert len(r.failures) == 1
+    assert "ПлатежноеПоручение" in out
+    assert BANK_CLEAN not in out
+
+
+@pytest.mark.parametrize("missing", ["ПлатежноеПоручение", "СписаниеСРасчетногоСчета"])
+def test_s2_missing_document_is_failure(fake_base, capsys, missing):
+    """С2 / INV-AUDIT-10: нет документа ПлатежноеПоручение/СписаниеСРасчетногоСчета -> отказ с именем в причине."""
+    docs = [d for d in ("ПлатежноеПоручение", "СписаниеСРасчетногоСчета", "СообщениеОбменСБанками")
+            if d != missing]
+    _meta(fake_base, docs=docs)
+    fake_base.on(MSG, [])
+    r = Report(echo=True)
+    capsys.readouterr()
+    bank_exchange(fake_base, r, Options())
+    r.summary()
+    out = capsys.readouterr().out
+    assert len(r.failures) == 1
+    assert missing in out
+    assert BANK_CLEAN not in out
