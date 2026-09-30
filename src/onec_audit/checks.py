@@ -41,8 +41,9 @@ SERVICE_DOC_TYPES = frozenset({
     "ПакетОбменСБанками", "СообщениеОбменСБанками", "РегламентированныйОтчет",
 })
 
-# Непроведённые регламентные операции — находка раздела «Закрытие месяца»,
-# в счётчик непроведённых сводки не входят. В служебные не попадают никогда.
+# Регламентные операции не проводятся по устройству: обработка закрытия месяца
+# пишет движения, но флаг Проведен не ставит. В счётчик непроведённых сводки
+# не входят (INV-AUDIT-22). В служебные не попадают никогда.
 NEVER_STRUCTURAL = {"РегламентнаяОперация"}
 
 
@@ -188,7 +189,8 @@ def unposted_documents(b: Base, r: Report, opt: Options) -> None:
     for_summary = [x for x in regular if x["тип"] not in NEVER_STRUCTURAL]
     if len(for_summary) != len(regular):
         r.w()
-        r.w("   Регламентные операции здесь не считаются — это закрытие месяца, см. раздел 6.")
+        r.w("   Регламентные операции здесь не считаются: флаг «Проведён» у них не ставится")
+        r.w("   по устройству, закрытие месяца разбирается в разделе 6.")
     open_total = sum(x["открыт"] for x in for_summary)
     all_total = sum(x["непров"] for x in for_summary)
     if not open_total and all_total:
@@ -496,6 +498,7 @@ def partners(b: Base, r: Report, opt: Options) -> None:
     срабатывания на каждой компании с обособленными подразделениями.
     """
     r.head("3. КОНТРАГЕНТЫ")
+    errors: list[str] = []
     try:
         groups: dict[str, dict[str, list[dict]]] = {}
         for row in b.rows("""// контрагенты: один ИНН
@@ -542,7 +545,7 @@ def partners(b: Base, r: Report, opt: Options) -> None:
                 for kpp, x in bs:
                     r.w(f"        КПП {kpp:<12} код {x['код']:<12} {x['наим']}")
     except Exception as exc:
-        r.fail(partners.__name__, f"дубли: {exc}")
+        errors.append(f"дубли: {exc}")
 
     try:
         # Имена не угадываем: нет перечисления или значения — вид не определён.
@@ -596,7 +599,9 @@ def partners(b: Base, r: Report, opt: Options) -> None:
         if named:
             r.finding(f"юрлиц без ИНН с документами: {len(named)} ({', '.join(named)})")
     except Exception as exc:
-        r.fail(partners.__name__, f"без ИНН: {exc}")
+        errors.append(f"без ИНН: {exc}")
+    if errors:
+        r.fail(partners.__name__, "; ".join(errors))
 
 
 # ---------------------------------------------------------------------------
@@ -650,10 +655,11 @@ def marked_for_deletion(b: Base, r: Report, opt: Options) -> None:
 def month_closing(b: Base, r: Report, opt: Options) -> None:
     """Закрытие месяца по завершённым месяцам.
 
-    Прямого признака «месяц закрыт» в базе нет, поэтому смотрим косвенно:
-    есть ли регламентные операции за месяц, проведены ли они, и не висят ли
-    несписанные затраты на конец месяца. Текущий месяц не проверяем —
-    его закрывать ещё рано.
+    Месяц закрыт, если за него есть регламентная операция: её создаёт только
+    обработка закрытия месяца. Флаг Проведен у регламентных операций не
+    ставится, признаком не служит. Нет операций - «не закрывался», и только
+    для таких месяцев печатаются остатки затратных счетов. Текущий месяц
+    не проверяем - его закрывать ещё рано.
     """
     r.head("6. ЗАКРЫТИЕ МЕСЯЦА")
     if "РегламентнаяОперация" not in b.names(b.md.Документы):
@@ -666,29 +672,42 @@ def month_closing(b: Base, r: Report, opt: Options) -> None:
         return
     first, last = dt.datetime(*months[0], 1), dt.datetime(*months[-1], 1)
 
-    r.w(f"   Проверяются завершённые месяцы: {first:%Y-%m} .. {last:%Y-%m}")
+    r.w(f"   Проверяются завершённые месяцы открытого периода: {len(months)}")
     r.w()
-    r.w(f"   {'Месяц':<10}{'операций':>9}{'проведено':>11}   Состояние")
+
+    ops: dict[tuple[int, int], tuple[int, int]] | None = {}
+    try:
+        # Границы литералами (datetime_literal), группировка по ГОД/МЕСЯЦ целыми.
+        ly, lm = (last.year + 1, 1) if last.month == 12 else (last.year, last.month + 1)
+        end = dt.datetime(ly, lm, 1)
+        for row in b.rows(f"""// закрытие: операции
+            ВЫБРАТЬ ГОД(Д.Дата) КАК Год, МЕСЯЦ(Д.Дата) КАК Месяц,
+                   КОЛИЧЕСТВО(РАЗЛИЧНЫЕ Д.Ссылка) КАК Всего,
+                   КОЛИЧЕСТВО(РАЗЛИЧНЫЕ Х.Регистратор) КАК СДвижениями
+            ИЗ Документ.РегламентнаяОперация КАК Д
+                ЛЕВОЕ СОЕДИНЕНИЕ РегистрБухгалтерии.Хозрасчетный КАК Х
+                ПО Х.Регистратор = Д.Ссылка
+            ГДЕ НЕ Д.ПометкаУдаления
+              И Д.Дата >= {datetime_literal(first)} И Д.Дата < {datetime_literal(end)}
+            СГРУППИРОВАТЬ ПО ГОД(Д.Дата), МЕСЯЦ(Д.Дата)
+        """):
+            ops[(int(row.Год), int(row.Месяц))] = (int(row.Всего or 0), int(row.СДвижениями or 0))
+    except Exception as exc:
+        r.fail(month_closing.__name__, f"операции: {exc}")
+        ops = None
 
     unclosed = []
     for year, num in months:
-        month = dt.datetime(year, num, 1)
-        total = posted = 0
-        failed = False
-        try:
-            # ГОД/МЕСЯЦ целыми: дат в параметрах нет, значит нет и сдвига пояса.
-            row = b.one("""
-                ВЫБРАТЬ КОЛИЧЕСТВО(*) КАК N,
-                       СУММА(ВЫБОР КОГДА Проведен ТОГДА 1 ИНАЧЕ 0 КОНЕЦ) КАК P
-                ИЗ Документ.РегламентнаяОперация
-                ГДЕ НЕ ПометкаУдаления И ГОД(Дата) = &Г И МЕСЯЦ(Дата) = &М
-            """, Г=month.year, М=month.month)
-            if row:
-                total, posted = int(row.N or 0), int(row.P or 0)
-        except Exception as exc:
-            r.fail(month_closing.__name__, f"{month:%Y-%m}: {exc}")
-            failed = True
+        label = f"{year}-{num:02d}"
+        if ops is None:
+            r.w(f"   {label}  НЕ ПРОВЕРЕН - запрос операций не выполнен")
+            continue
+        total, moved = ops.get((year, num), (0, 0))
+        if total > 0:
+            r.w(f"   {label}  операций {total}, с проводками {moved}  закрыт")
+            continue
 
+        unclosed.append(dt.datetime(year, num, 1))
         residue, residue_failed = [], False
         try:
             # Остаток на конец месяца = на начало следующего: момент 23:59:59
@@ -696,54 +715,34 @@ def month_closing(b: Base, r: Report, opt: Options) -> None:
             ny, nm = (year + 1, 1) if num == 12 else (year, num + 1)
             nxt = f"ДАТАВРЕМЯ({ny}, {nm}, 1, 0, 0, 0)"
             # Группировка по Ост.Счет (не по Ост.Счет.Код - INV-AUDIT-60), затем
-            # субсчета сворачиваются в счет верхнего уровня из перечня.
+            # субсчета (20.01 и т.п.) сворачиваются в счет верхнего уровня.
             for row in b.rows(f"""// закрытие: остатки
                 ВЫБРАТЬ Ост.Счет.Код КАК Код, СУММА(Ост.СуммаОстатокДт) КАК Дт
                 ПОМЕСТИТЬ ОстПоСчетам
                 ИЗ РегистрБухгалтерии.Хозрасчетный.Остатки({nxt}, , , ) КАК Ост
                 СГРУППИРОВАТЬ ПО Ост.Счет;
-                ВЫБРАТЬ
-                    ВЫБОР КОГДА ПОДСТРОКА(О.Код, 1, 5) = "90.09" ТОГДА "90.09"
-                          ИНАЧЕ ПОДСТРОКА(О.Код, 1, 2) КОНЕЦ КАК Код,
-                    СУММА(О.Дт) КАК Сумма
+                ВЫБРАТЬ ПОДСТРОКА(О.Код, 1, 2) КАК Код, СУММА(О.Дт) КАК Сумма
                 ИЗ ОстПоСчетам КАК О
-                ГДЕ ПОДСТРОКА(О.Код, 1, 5) = "90.09"
-                    ИЛИ (ПОДСТРОКА(О.Код, 1, 2) В ("20", "25", "26", "44")
-                         И (ДЛИНАСТРОКИ(О.Код) = 2 ИЛИ ПОДСТРОКА(О.Код, 3, 1) = "."))
-                СГРУППИРОВАТЬ ПО
-                    ВЫБОР КОГДА ПОДСТРОКА(О.Код, 1, 5) = "90.09" ТОГДА "90.09"
-                          ИНАЧЕ ПОДСТРОКА(О.Код, 1, 2) КОНЕЦ
+                ГДЕ ПОДСТРОКА(О.Код, 1, 2) В ("20", "25", "26", "44")
+                    И (ДЛИНАСТРОКИ(О.Код) = 2 ИЛИ ПОДСТРОКА(О.Код, 3, 1) = ".")
+                СГРУППИРОВАТЬ ПО ПОДСТРОКА(О.Код, 1, 2)
                 ИМЕЮЩИЕ СУММА(О.Дт) <> 0
                 УПОРЯДОЧИТЬ ПО Код
             """):
                 residue.append(f"{b.s(row.Код)} {money(row.Сумма)}")
         except Exception as exc:
-            r.fail(month_closing.__name__, f"остатки {month:%Y-%m}: {exc}")
+            r.fail(month_closing.__name__, f"остатки {label}: {exc}")
             residue_failed = True
-
-        if failed:
-            state = "НЕ ПРОВЕРЕН — запрос не выполнен"
-        elif total == 0:
-            state = "НЕ ЗАКРЫВАЛСЯ — операций нет"
-        elif posted == 0:
-            state = "НЕ ЗАКРЫТ — операции есть, ни одна не проведена"
-        elif posted < total:
-            state = f"ЧАСТИЧНО — проведено {posted} из {total}"
-        else:
-            state = "закрыт"
-        if residue and state != "закрыт":
-            state += "  [" + "; ".join(residue) + "]"
-
-        bad = state != "закрыт" and not failed
-        if residue_failed:
-            state = "остатки не проверены" if state == "закрыт" else state + "  [остатки не проверены]"
-        r.w(f"   {month:%Y-%m}   {total:>9}{posted:>11}   {state}")
-        if bad:
-            unclosed.append(month)
+        tail = ""
+        if residue:
+            tail = "  [" + "; ".join(residue) + "]"
+        elif residue_failed:
+            tail = "  [остатки не проверены]"
+        r.w(f"   {label}  не закрывался{tail}")
 
     if unclosed:
-        r.finding(f"не закрыто месяцев: {len(unclosed)} "
-                  f"(с {unclosed[0]:%Y-%m} по {unclosed[-1]:%Y-%m})")
+        r.finding(f"не закрывался месяц: {len(unclosed)} "
+                  f"({unclosed[0]:%Y-%m} .. {unclosed[-1]:%Y-%m})")
         r.w()
         r.w("   Закрывается: Операции → Закрытие месяца.")
         r.w("   Помнить: правка документа задним числом снимает закрытие того")
