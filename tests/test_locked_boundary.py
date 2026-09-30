@@ -1,5 +1,5 @@
 """Граница закрытого периода. Спека: docs/dev/2026-09-30-spec-locked-boundary.md
-Инварианты: INV-AUDIT-03, INV-AUDIT-04, INV-AUDIT-80.
+Инварианты: INV-AUDIT-03, INV-AUDIT-04, INV-AUDIT-10, INV-AUDIT-18, INV-AUDIT-80.
 """
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def _boundary_queries(fake):
 # ---------- AC-1 ----------
 @pytest.mark.parametrize("arg", ["2025-01-01", "2025"])
 def test_ac1_param_gives_date_and_no_db_query(arg, fake_base, patch_base, monkeypatch, capsys):
-    """AC-1 / INV-AUDIT-03: параметр (дата или год) -> 2025-01-01, источник 'параметр', база не опрашивается."""
+    """AC-1 / INV-AUDIT-04: параметр (дата или год) -> 2025-01-01, источник 'параметр', база не опрашивается."""
     _setup(fake_base)
     _, out, seen = _run(fake_base, patch_base, monkeypatch, capsys, ["--locked-before", arg])
     assert seen == [date(2025, 1, 1)]
@@ -73,14 +73,14 @@ def test_ac1_param_gives_date_and_no_db_query(arg, fake_base, patch_base, monkey
 
 
 def test_ac1_param_beats_db(fake_base, patch_base, monkeypatch, capsys):
-    """AC-1 / INV-AUDIT-03: параметр приоритетнее даты из базы."""
+    """AC-1 / INV-AUDIT-04: параметр приоритетнее даты из базы."""
     _setup(fake_base, reg_date=datetime(2023, 12, 31))
     _, _, seen = _run(fake_base, patch_base, monkeypatch, capsys, ["--locked-before", "2025-01-01"])
     assert seen == [date(2025, 1, 1)]
 
 
 def test_ac1_resolve_boundary_with_param_does_not_query(fake_base):
-    """AC-1 / INV-AUDIT-03: resolve_boundary при заданном locked_before не трогает базу и значение."""
+    """AC-1 / INV-AUDIT-04: resolve_boundary при заданном locked_before не трогает базу и значение."""
     _setup(fake_base)
     opt = Options(locked_before=date(2025, 3, 15))
     resolve_boundary(fake_base, Report(echo=False), opt)
@@ -90,7 +90,7 @@ def test_ac1_resolve_boundary_with_param_does_not_query(fake_base):
 
 # ---------- AC-2 ----------
 def test_ac2_db_date_plus_one_day(fake_base):
-    """AC-2 / INV-AUDIT-03: константа истинна, дата 2024-12-31 -> граница 2025-01-01."""
+    """AC-2 / INV-AUDIT-04: константа истинна, дата 2024-12-31 -> граница 2025-01-01."""
     _setup(fake_base)
     opt = Options()
     r = Report(echo=False)
@@ -100,7 +100,7 @@ def test_ac2_db_date_plus_one_day(fake_base):
 
 
 def test_ac2_main_takes_boundary_from_db(fake_base, patch_base, monkeypatch, capsys):
-    """AC-2 / INV-AUDIT-03: main до проверок берет границу из базы; отказа нет."""
+    """AC-2 / INV-AUDIT-04: main до проверок берет границу из базы; отказа нет."""
     _setup(fake_base)
     code, _, seen = _run(fake_base, patch_base, monkeypatch, capsys)
     assert seen == [date(2025, 1, 1)]
@@ -108,7 +108,7 @@ def test_ac2_main_takes_boundary_from_db(fake_base, patch_base, monkeypatch, cap
 
 
 def test_ac2_default_options_locked_before_none():
-    """AC-2 / INV-AUDIT-03: Options().locked_before по умолчанию None."""
+    """AC-2 / INV-AUDIT-04: Options().locked_before по умолчанию None."""
     assert Options().locked_before is None
 
 
@@ -125,7 +125,7 @@ _NO_BOUNDARY = {
 
 @pytest.mark.parametrize("kw", list(_NO_BOUNDARY.values()), ids=list(_NO_BOUNDARY.keys()))
 def test_ac3_resolve_no_boundary_no_failure(kw, fake_base):
-    """AC-3 / INV-AUDIT-03, INV-AUDIT-80: границы нет, отказа нет."""
+    """AC-3 / INV-AUDIT-04: границы нет, отказа нет."""
     _setup(fake_base, **kw)
     opt = Options()
     r = Report(echo=False)
@@ -136,7 +136,7 @@ def test_ac3_resolve_no_boundary_no_failure(kw, fake_base):
 
 @pytest.mark.parametrize("kw", list(_NO_BOUNDARY.values()), ids=list(_NO_BOUNDARY.keys()))
 def test_ac3_main_not_set_source(kw, fake_base, patch_base, monkeypatch, capsys):
-    """AC-3 / INV-AUDIT-03, INV-AUDIT-80: в main источник 'не задана', код 0, без отказов."""
+    """AC-3 / INV-AUDIT-04: в main источник 'не задана', код 0, без отказов."""
     _setup(fake_base, **kw)
     code, out, seen = _run(fake_base, patch_base, monkeypatch, capsys)
     assert seen == [None]
@@ -154,7 +154,7 @@ def _failing_boundary_base(fake):
 
 
 def test_ac4_resolve_failure_registered(fake_base):
-    """AC-4 / INV-AUDIT-80: падение запроса -> r.fail('locked_boundary'), границы нет."""
+    """AC-4 / INV-AUDIT-10: падение запроса -> r.fail('locked_boundary'), границы нет."""
     _failing_boundary_base(fake_base)
     opt = Options()
     r = Report(echo=False)
@@ -165,7 +165,7 @@ def test_ac4_resolve_failure_registered(fake_base):
 
 
 def test_ac4_main_exit4_and_other_checks_run(fake_base, patch_base, monkeypatch, capsys):
-    """AC-4 / INV-AUDIT-80: отказ -> код 4, остальные проверки выполняются без границы."""
+    """AC-4 / INV-AUDIT-10, 18: отказ -> код 4, остальные проверки выполняются без границы."""
     _failing_boundary_base(fake_base)
     ran = []
 
@@ -227,7 +227,7 @@ def test_ac6_is_locked_no_boundary_always_false(moment):
 
 
 def test_ac7_months_start_at_boundary_month():
-    """AC-7 / INV-AUDIT-03: граница 2025-03-15 -> список с (2025, 3), до последнего завершенного месяца."""
+    """AC-7 / INV-AUDIT-80: граница 2025-03-15 -> список с (2025, 3), до последнего завершенного месяца."""
     from onec_audit.checks import months_to_check
     ms = months_to_check(Options(locked_before=date(2025, 3, 15)), date(2025, 6, 10))
     assert ms[0] == (2025, 3)
@@ -236,7 +236,7 @@ def test_ac7_months_start_at_boundary_month():
 
 
 def test_ac7_months_without_boundary_start_last_year_january():
-    """AC-7 / INV-AUDIT-03: без границы - с января прошлого года."""
+    """AC-7 / INV-AUDIT-80: без границы - с января прошлого года."""
     from onec_audit.checks import months_to_check
     ms = months_to_check(Options(), date(2025, 6, 10))
     assert ms[0] == (2024, 1)

@@ -1,5 +1,5 @@
 """Обмен с банком по ссылкам. Спека: docs/dev/2026-09-30-spec-bank.md
-Инварианты: INV-AUDIT-03, 05, 07, 40, 41, 43, 44.
+Инварианты: INV-AUDIT-03, 05, 07, 10, 40, 41, 42, 43, 44.
 """
 from __future__ import annotations
 
@@ -86,7 +86,7 @@ def test_ac2_no_payment_in_body_and_summary(fake_base, capsys):
 
 
 def test_ac3_orphan_with_payment_found_listed_not_in_summary(fake_base, capsys):
-    """AC-3 / INV-AUDIT-05, 43: сирота, списание по реквизитам найдено -> список сирот, не в сводке."""
+    """AC-3 / INV-AUDIT-05, 41: сирота, списание по реквизитам найдено -> список сирот, не в сводке."""
     body, summ, r = _run(fake_base, [_orphan(Номер="СИР-9")], capsys,
                          by_req=types.SimpleNamespace(Дата=datetime(2026, 1, 9)))
     assert "платежку удалили и пересоздали, деньги ушли по новому документу" in body
@@ -97,7 +97,7 @@ def test_ac3_orphan_with_payment_found_listed_not_in_summary(fake_base, capsys):
 
 
 def test_ac4_orphan_without_payment_in_summary(fake_base, capsys):
-    """AC-4 / INV-AUDIT-05, 43: сирота, списания нет -> в сводке с пометкой."""
+    """AC-4 / INV-AUDIT-05, 41: сирота, списания нет -> в сводке с пометкой."""
     body, summ, r = _run(fake_base, [_orphan(Номер="СИР-9")], capsys, by_req=None)
     assert ORPHAN_NOTE in summ
     assert SUMMARY_PREFIX in summ
@@ -107,7 +107,7 @@ def test_ac4_orphan_without_payment_in_summary(fake_base, capsys):
 
 
 def test_orphan_lookup_params_inn_and_sum_not_float(fake_base, capsys):
-    """AC-3 / INV-AUDIT-07, 44 (К-3): реквизитный запрос получает ИНН и Сумму как Decimal/строку, не float."""
+    """AC-3 / INV-AUDIT-07, 41 (К-3): реквизитный запрос получает ИНН и Сумму как Decimal/строку, не float."""
     seen = []
 
     def spy(text, params):
@@ -131,7 +131,7 @@ def test_linked_payment_does_not_query_by_requisites(fake_base, capsys):
 
 
 def test_ac5_non_payment_message_body_only(fake_base, capsys):
-    """AC-5 / INV-AUDIT-05: не ПП в незавершенном статусе -> в теле строкой со статусом и числом, не в сводке."""
+    """AC-5 / INV-AUDIT-05, 44: не ПП в незавершенном статусе -> в теле строкой со статусом и числом, не в сводке."""
     rows = [_orphan(ЭтоПП=False, Статус="Отправлен") for _ in range(3)]
     body, summ, r = _run(fake_base, rows, capsys)
     assert "Отправлен" in body and "3" in body
@@ -141,7 +141,7 @@ def test_ac5_non_payment_message_body_only(fake_base, capsys):
 
 
 def test_ac6_locked_marked_not_in_summary(fake_base, capsys):
-    """AC-6 / INV-AUDIT-03: ПП без списания раньше границы -> [закрыт], не в сводке."""
+    """AC-6 / INV-AUDIT-03, 43: ПП без списания раньше границы -> [закрыт], не в сводке."""
     opt = Options(locked_before=date(2026, 1, 1))
     body, summ, r = _run(fake_base, [_row()], capsys, opt=opt)
     assert "[закрыт]" in body
@@ -150,7 +150,7 @@ def test_ac6_locked_marked_not_in_summary(fake_base, capsys):
 
 
 def test_ac6_not_locked_after_boundary_has_no_mark(fake_base, capsys):
-    """AC-6 (граница) / INV-AUDIT-03: сообщение не раньше границы -> без [закрыт], в сводке."""
+    """AC-6 (граница) / INV-AUDIT-03, 43: сообщение не раньше границы -> без [закрыт], в сводке."""
     opt = Options(locked_before=date(2025, 6, 1))
     body, summ, _ = _run(fake_base, [_row()], capsys, opt=opt)
     assert "[закрыт]" not in body
@@ -158,7 +158,7 @@ def test_ac6_not_locked_after_boundary_has_no_mark(fake_base, capsys):
 
 
 def test_ac6_locked_orphan_without_payment_not_in_summary(fake_base, capsys):
-    """AC-6 / INV-AUDIT-03: сирота без списания раньше границы тоже [закрыт] и не в сводке."""
+    """AC-6 / INV-AUDIT-03, 43: сирота без списания раньше границы тоже [закрыт] и не в сводке."""
     opt = Options(locked_before=date(2026, 1, 1))
     body, summ, _ = _run(fake_base, [_orphan()], capsys, opt=opt)
     assert "[закрыт]" in body
@@ -167,7 +167,7 @@ def test_ac6_locked_orphan_without_payment_not_in_summary(fake_base, capsys):
 
 @pytest.mark.parametrize("kind", ["paid", "attention", "orphan_found", "other"])
 def test_ac7_fifteen_rows_printed_fully(fake_base, capsys, kind):
-    """AC-7 / INV-AUDIT-07: 15 сообщений в группе -> все 15 строк в теле, без усечения."""
+    """AC-7 / INV-AUDIT-05, 43: 15 сообщений в группе -> все 15 строк в теле, без усечения."""
     by_req = None
     if kind == "paid":
         rows = [_row(Списано=True, ПлатежкаНомер=f"НОМ-{i:03d}") for i in range(15)]
@@ -187,7 +187,7 @@ def test_ac7_fifteen_rows_printed_fully(fake_base, capsys, kind):
 
 
 def test_ac7_attention_summary_lists_all_fifteen(fake_base, capsys):
-    """AC-7 / INV-AUDIT-07, 41: в сводке адресно перечислены все 15 платежек, число N."""
+    """AC-7 / INV-AUDIT-05, 41, 43: в сводке адресно перечислены все 15 платежек, число N."""
     rows = [_row(ПлатежкаНомер=f"НОМ-{i:03d}") for i in range(15)]
     _, summ, _ = _run(fake_base, rows, capsys)
     assert f"{SUMMARY_PREFIX}: 15" in summ
@@ -243,7 +243,7 @@ def test_no_clean_verdict_when_attention_present(fake_base, capsys):
 
 
 def test_number_year_mismatch_not_orphan(fake_base, capsys):
-    """AC-2 / INV-AUDIT-05: связь из поля Платежка, не из номера/года: сообщение 09.01 к платежке 30.12 - не сирота."""
+    """AC-2 / INV-AUDIT-40: связь из поля Платежка, не из номера/года: сообщение 09.01 к платежке 30.12 - не сирота."""
     row = _row(Дата=datetime(2026, 1, 9), Номер="999", ПлатежкаНомер="ПП-77")
     body, _, _ = _run(fake_base, [row], capsys)
     assert "платежка удалена" not in body
@@ -315,7 +315,7 @@ def test_u7_lookup_fails_for_both_one_failure_both_attention(fake_base, capsys):
 
 
 def test_s2_no_links_register_orphan_branch_no_failure(fake_base, capsys):
-    """С2 / INV-AUDIT-10: нет регистра связей -> ПП-сообщения по ветке сирот, отказа нет."""
+    """С2 / INV-AUDIT-42: нет регистра связей -> ПП-сообщения по ветке сирот, отказа нет."""
     _meta(fake_base, register=False)
     fake_base.on(BY_REQ, types.SimpleNamespace(Дата=datetime(2026, 1, 9)))
     fake_base.on(MSG, [_orphan(Номер="СИР-9")])
@@ -329,7 +329,7 @@ def test_s2_no_links_register_orphan_branch_no_failure(fake_base, capsys):
 
 
 def test_s2_no_links_register_orphan_without_payment_attention(fake_base, capsys):
-    """С2 / INV-AUDIT-05: нет регистра связей, списания нет -> 'платежка удалена, списания не найдено', отказа нет."""
+    """С2 / INV-AUDIT-41, 42: нет регистра связей, списания нет -> 'платежка удалена, списания не найдено', отказа нет."""
     _meta(fake_base, register=False)
     fake_base.on(BY_REQ, None)
     fake_base.on(MSG, [_orphan()])
@@ -341,7 +341,7 @@ def test_s2_no_links_register_orphan_without_payment_attention(fake_base, capsys
 
 
 def test_s2_no_kinds_enum_is_failure_with_reason(fake_base, capsys):
-    """С2 / INV-AUDIT-10: нет перечисления ВидыЭДОбменСБанками -> отказ с понятной причиной, без вердикта 'нет'."""
+    """С2 / INV-AUDIT-10, 42: нет перечисления ВидыЭДОбменСБанками -> отказ с понятной причиной, без вердикта 'нет'."""
     _meta(fake_base, enum=False)
     fake_base.on(MSG, [])
     r = Report(echo=True)
@@ -356,7 +356,7 @@ def test_s2_no_kinds_enum_is_failure_with_reason(fake_base, capsys):
 
 
 def test_s2_no_pp_value_in_kinds_enum_is_failure(fake_base, capsys):
-    """С2 / INV-AUDIT-10: в перечислении нет значения ПлатежноеПоручение -> отказ с причиной."""
+    """С2 / INV-AUDIT-10, 42: в перечислении нет значения ПлатежноеПоручение -> отказ с причиной."""
     _meta(fake_base, enum_value=False)
     fake_base.on(MSG, [])
     r = Report(echo=True)
@@ -371,7 +371,7 @@ def test_s2_no_pp_value_in_kinds_enum_is_failure(fake_base, capsys):
 
 @pytest.mark.parametrize("missing", ["ПлатежноеПоручение", "СписаниеСРасчетногоСчета"])
 def test_s2_missing_document_is_failure(fake_base, capsys, missing):
-    """С2 / INV-AUDIT-10: нет документа ПлатежноеПоручение/СписаниеСРасчетногоСчета -> отказ с именем в причине."""
+    """С2 / INV-AUDIT-10, 42: нет документа ПлатежноеПоручение/СписаниеСРасчетногоСчета -> отказ с именем в причине."""
     docs = [d for d in ("ПлатежноеПоручение", "СписаниеСРасчетногоСчета", "СообщениеОбменСБанками")
             if d != missing]
     _meta(fake_base, docs=docs)

@@ -1,6 +1,6 @@
 """Дубли контрагентов по паре ИНН+КПП; остатки закрытия месяца.
 Спека: docs/dev/2026-09-30-spec-partners-closing.md
-Инварианты: INV-AUDIT-50, 51, 60, 82.
+Инварианты: INV-AUDIT-10, 50, 51, 60, 81, 82.
 Тесты написаны по спеке, без чтения реализации.
 """
 from __future__ import annotations
@@ -132,7 +132,7 @@ def test_empty_inn_not_dupe(fake_base, capsys):
 
 @pytest.mark.partners_dupes
 def test_ac4_dupe_query_fails_partners_fails_noinn_printed(fake_base, capsys):
-    """AC-4 / INV-AUDIT-82: отказ запроса дублей -> отказ partners, список без ИНН печатается."""
+    """AC-4 / INV-AUDIT-10, 51: отказ запроса дублей -> отказ partners, список без ИНН печатается."""
     fake_base.on(_m(M_NOINN), [ns(Код="000009", Наим="ООО Без-ИНН", Физ=False, ЕстьДокументы=True)])
     fake_base.rules.insert(0, (_m(M_DUP), RuntimeError("boom")))
     body, summ, r = _run(checks_mod.partners, fake_base, capsys)
@@ -160,7 +160,7 @@ def _month_only(monkeypatch, ym):
     ((2025, 12), "ДАТАВРЕМЯ(2026, 1, 1"),
 ])
 def test_ac5_next_month_start_literal(ym, literal, fake_base, capsys, monkeypatch):
-    """AC-5 / INV-AUDIT-60: остаток на начало следующего месяца, без 23, 59, 59."""
+    """AC-5 / INV-AUDIT-82: остаток на начало следующего месяца, без 23, 59, 59."""
     _month_only(monkeypatch, ym)
     qs = _closing_queries(fake_base, capsys, *ym)
     assert qs, "запрос остатков с маркером не выполнялся"
@@ -172,7 +172,7 @@ def test_ac5_next_month_start_literal(ym, literal, fake_base, capsys, monkeypatc
 
 @pytest.mark.closing_balances
 def test_ac6_one_row_per_account_one_fragment(fake_base, capsys, monkeypatch):
-    """AC-6 / INV-AUDIT-60: запрос отдал одну строку по 20 -> ровно один фрагмент '20 <сумма>'."""
+    """AC-6 / INV-AUDIT-82: запрос отдал одну строку по 20 -> ровно один фрагмент '20 <сумма>'."""
     _month_only(monkeypatch, (2025, 3))
     fake_base.names_by_kind["Документы"] = ["РегламентнаяОперация"]  # INV-AUDIT-14
     fake_base.on(_m(M_BAL), [ns(Код="20", Сумма=1234.56)])
@@ -213,7 +213,7 @@ def _month_line(body, ym):
 
 @pytest.mark.closing_state
 def test_ac8_ops_without_postings_is_closed(fake_base, capsys, monkeypatch):
-    """AC-8 / INV-AUDIT-50: Всего=8, СДвижениями=0 -> 'закрыт', не в сводке, остатки не печатаются."""
+    """AC-8 / INV-AUDIT-81: Всего=8, СДвижениями=0 -> 'закрыт', не в сводке, остатки не печатаются."""
     _months(monkeypatch, [(2025, 12)])
     _state_base(fake_base, ops=[ns(Год=2025, Месяц=12, Всего=8, СДвижениями=0)],
                 bal=[ns(Код="20", Сумма=500.0)])
@@ -227,7 +227,7 @@ def test_ac8_ops_without_postings_is_closed(fake_base, capsys, monkeypatch):
 
 @pytest.mark.closing_state
 def test_ac9_no_row_is_not_closed_and_in_summary(fake_base, capsys, monkeypatch):
-    """AC-9 / INV-AUDIT-50: нет строки в ответе -> 'не закрывался', в сводке."""
+    """AC-9 / INV-AUDIT-81: нет строки в ответе -> 'не закрывался', в сводке."""
     _months(monkeypatch, [(2026, 2)])
     _state_base(fake_base)
     body, summ, _ = _run(checks_mod.month_closing, fake_base, capsys)
@@ -237,7 +237,7 @@ def test_ac9_no_row_is_not_closed_and_in_summary(fake_base, capsys, monkeypatch)
 
 @pytest.mark.closing_state
 def test_ac10_no_9009_and_balances_only_for_unclosed(fake_base, capsys, monkeypatch):
-    """AC-10 / INV-AUDIT-60: запрос остатков без 90.09; остатки только у 'не закрывался'."""
+    """AC-10 / INV-AUDIT-82: запрос остатков без 90.09; остатки только у 'не закрывался'."""
     _months(monkeypatch, [(2025, 11), (2025, 12)])
     _state_base(fake_base, ops=[ns(Год=2025, Месяц=11, Всего=3, СДвижениями=2)],
                 bal=[ns(Код="26", Сумма=1234.56)])
@@ -251,7 +251,7 @@ def test_ac10_no_9009_and_balances_only_for_unclosed(fake_base, capsys, monkeypa
 
 @pytest.mark.closing_state
 def test_ac11_five_months_one_summary_line(fake_base, capsys, monkeypatch):
-    """AC-11 / INV-AUDIT-50: пять месяцев подряд 'не закрывался' -> одна строка сводки с диапазоном."""
+    """AC-11 / INV-AUDIT-81: пять месяцев подряд 'не закрывался' -> одна строка сводки с диапазоном."""
     _months(monkeypatch, [(2026, m) for m in range(2, 7)])
     _state_base(fake_base)
     _, summ, _ = _run(checks_mod.month_closing, fake_base, capsys)
@@ -262,7 +262,7 @@ def test_ac11_five_months_one_summary_line(fake_base, capsys, monkeypatch):
 
 @pytest.mark.closing_state
 def test_all_closed_no_summary_line(fake_base, capsys, monkeypatch):
-    """AC-8 / INV-AUDIT-50: все месяцы закрыты -> строки 'не закрывался месяц' нет."""
+    """AC-8 / INV-AUDIT-81: все месяцы закрыты -> строки 'не закрывался месяц' нет."""
     _months(monkeypatch, [(2025, 1), (2025, 2)])
     _state_base(fake_base, ops=[ns(Год=2025, Месяц=1, Всего=2, СДвижениями=1),
                                 ns(Год=2025, Месяц=2, Всего=1, СДвижениями=1)])
@@ -272,7 +272,7 @@ def test_all_closed_no_summary_line(fake_base, capsys, monkeypatch):
 
 @pytest.mark.closing_state
 def test_old_states_absent(fake_base, capsys, monkeypatch):
-    """AC-8 / INV-AUDIT-50: состояний 'не закрыт' и 'частично' по флагу больше нет."""
+    """AC-8 / INV-AUDIT-81: состояний 'не закрыт' и 'частично' по флагу больше нет."""
     _months(monkeypatch, [(2025, 12)])
     _state_base(fake_base, ops=[ns(Год=2025, Месяц=12, Всего=8, СДвижениями=5, Проведено=0)])
     body, summ, _ = _run(checks_mod.month_closing, fake_base, capsys)

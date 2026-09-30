@@ -1,5 +1,5 @@
 """Адресные списки. Спека: docs/dev/2026-09-30-spec-sales-links.md
-Инварианты: INV-AUDIT-05, 09, 20..25, 30..32, 52.
+Инварианты: INV-AUDIT-05, 09, 10, 20..25, 30..32, 52.
 Тесты написаны по спеке, без чтения реализации.
 """
 from __future__ import annotations
@@ -83,7 +83,7 @@ def _no_inn_base(fake, rows):
 
 
 def test_ac1_no_inn_list_and_summary(fake_base, capsys):
-    """AC-1 / INV-AUDIT-05, 20: три строки в теле; в сводке только юрлицо с документами."""
+    """AC-1 / INV-AUDIT-05, 52: три строки в теле; в сводке только юрлицо с документами."""
     _no_inn_base(fake_base, [
         ns(Код="000001", Наим="ООО Альфа", Физ=False, ЕстьДокументы=True),
         ns(Код="000002", Наим="ООО Бета", Физ=False, ЕстьДокументы=False),
@@ -97,7 +97,7 @@ def test_ac1_no_inn_list_and_summary(fake_base, capsys):
 
 
 def test_ac2_no_inn_empty(fake_base, capsys):
-    """AC-2 / INV-AUDIT-20: пусто -> в теле 'без ИНН: 0', в сводке строки нет."""
+    """AC-2 / INV-AUDIT-52: пусто -> в теле 'без ИНН: 0', в сводке строки нет."""
     _no_inn_base(fake_base, [])
     body, summ, _ = _run(_partners(), fake_base, capsys)
     assert "без ИНН: 0" in body
@@ -139,7 +139,7 @@ def test_ac3_regulatory_not_in_summary_counter(fake_base, capsys):
 
 
 def test_ac4_arbitrary_type_list_and_summary(fake_base, capsys):
-    """AC-4 / INV-AUDIT-22: список дата, номер, контрагент; сводка без 'всего'."""
+    """AC-4 / INV-AUDIT-23, 24: список дата, номер, контрагент; сводка без 'всего'."""
     _unposted_base(fake_base, "ПоступлениеТоваровУслуг", [
         ns(Дата=OPEN, Номер="0042", Контр="ООО Гамма"),
         ns(Дата=datetime(2025, 4, 1), Номер="0043", Контр="ООО Дельта"),
@@ -151,7 +151,7 @@ def test_ac4_arbitrary_type_list_and_summary(fake_base, capsys):
 
 
 def test_ac4_type_without_partner_dash(fake_base, capsys):
-    """AC-4 / INV-AUDIT-22: у типа нет реквизита Контрагент -> прочерк."""
+    """AC-4 / INV-AUDIT-24: у типа нет реквизита Контрагент -> прочерк."""
     _unposted_base(fake_base, "АвансовыйОтчет", [ns(Дата=OPEN, Номер="А-7")])
     body, _, _ = _run(_unposted(), fake_base, capsys, BOUNDARY)
     line = next(ln for ln in body.splitlines() if "А-7" in ln)
@@ -159,7 +159,7 @@ def test_ac4_type_without_partner_dash(fake_base, capsys):
 
 
 def test_ac5_only_closed_summary_silent(fake_base, capsys):
-    """AC-5 / INV-AUDIT-22, 23: только закрытые -> сводка молчит, в теле число закрытых (У4)."""
+    """AC-5 / INV-AUDIT-23, 24: только закрытые -> сводка молчит, в теле число закрытых (У4)."""
     _unposted_base(fake_base, "ПоступлениеТоваровУслуг", [], closed=2)
     body, summ, _ = _run(_unposted(), fake_base, capsys, BOUNDARY)
     assert "непроведённых в открытом периоде" not in summ
@@ -168,7 +168,7 @@ def test_ac5_only_closed_summary_silent(fake_base, capsys):
 
 # ---------- AC-6..AC-8, AC-10, AC-11: связи ----------
 def test_ac6_three_lists(fake_base, capsys):
-    """AC-6 / INV-AUDIT-24, 25: три списка, ИНН, вид операции, без сумм, три строки сводки."""
+    """AC-6 / INV-AUDIT-05, 31: три списка, ИНН, вид операции, без сумм, три строки сводки."""
     _setup_links(fake_base,
                  acts=[_link_row("А-1", contr="Акт-Контр", inn="1111111111")],
                  invoices=[_link_row("С-1", contr="Счет-Контр", inn="2222222222")],
@@ -185,7 +185,7 @@ def test_ac6_three_lists(fake_base, capsys):
 
 
 def test_ac7_closed_marked_and_not_in_summary(fake_base, capsys):
-    """AC-7 / INV-AUDIT-30: раньше границы -> [закрыт] в конце строки, в сводку не идет."""
+    """AC-7 / INV-AUDIT-32: раньше границы -> [закрыт] в конце строки, в сводку не идет."""
     _setup_links(fake_base,
                  acts=[_link_row("А-old", d=OLD)],
                  invoices=[_link_row("С-old", d=OLD)],
@@ -198,7 +198,7 @@ def test_ac7_closed_marked_and_not_in_summary(fake_base, capsys):
 
 
 def test_ac7_open_not_marked(fake_base, capsys):
-    """AC-7 / INV-AUDIT-30: открытая строка без пометки."""
+    """AC-7 / INV-AUDIT-32: открытая строка без пометки."""
     _setup_links(fake_base, acts=[_link_row("А-new")])
     body, _, _ = _run(_links(), fake_base, capsys, BOUNDARY)
     line = next(ln for ln in body.splitlines() if "А-new" in ln)
@@ -218,7 +218,7 @@ def test_ac8_all_empty(fake_base, capsys):
 
 @pytest.mark.parametrize("which", [REAL, INV, PAY])
 def test_ac10_one_list_fails_others_print(which, fake_base, capsys):
-    """AC-10 / INV-AUDIT-09, 32: отказ одного запроса -> отказ document_links, остальные печатаются."""
+    """AC-10 / INV-AUDIT-10, 31: отказ одного запроса -> отказ document_links, остальные печатаются."""
     fake = _setup_links(fake_base, [_link_row("А-1")], [_link_row("С-1")],
                         [_link_row("П-1", Вид="В")])
     fake.rules.insert(0, (_from(which), RuntimeError("boom")))
@@ -229,13 +229,13 @@ def test_ac10_one_list_fails_others_print(which, fake_base, capsys):
 
 
 def test_document_links_registered_after_month_closing():
-    """Контракт / INV-AUDIT-52: document_links в ALL_CHECKS сразу после month_closing."""
+    """Контракт (без INV): document_links в ALL_CHECKS сразу после month_closing."""
     names = [f.__name__ for f in checks_mod.ALL_CHECKS]
     assert names.index("document_links") == names.index("month_closing") + 1
 
 
 def test_ac11_unposted_realization_one_summary_line(fake_base, capsys):
-    """AC-11 / INV-AUDIT-52: непроведенная реализация дает одну строку сводки ('непроведённых')."""
+    """AC-11 / INV-AUDIT-22: непроведенная реализация дает одну строку сводки ('непроведённых')."""
     _unposted_base(fake_base, "РеализацияТоваровУслуг",
                    [ns(Дата=OPEN, Номер="Р-9", Контр="ООО Эпсилон", ЕстьСчет=False, Счет=None)])
     fake_base.on(_m("// оплата счёта"), None)
@@ -257,7 +257,7 @@ def _line(body, num):
 
 
 def test_ac9_paid_yes_with_date(fake_base, capsys):
-    """AC-9 / INV-AUDIT-31: на непроведенный счет ссылается поступление -> 'ДА <дата>'."""
+    """AC-9 / INV-AUDIT-25: на непроведенный счет ссылается поступление -> 'ДА <дата>'."""
     _sales_unposted(fake_base, "СчетНаОплатуПокупателю",
                     ns(Дата=OPEN, Номер="С-5", Контр="К", Ссылка="ref-5"),
                     ns(Дата=datetime(2025, 3, 20)))
@@ -266,7 +266,7 @@ def test_ac9_paid_yes_with_date(fake_base, capsys):
 
 
 def test_ac9_paid_no(fake_base, capsys):
-    """AC-9 / INV-AUDIT-31: нет ссылки -> 'НЕТ'."""
+    """AC-9 / INV-AUDIT-25: нет ссылки -> 'НЕТ'."""
     _sales_unposted(fake_base, "СчетНаОплатуПокупателю",
                     ns(Дата=OPEN, Номер="С-6", Контр="К", Ссылка="ref-6"), None)
     body, _, _ = _run(_unposted(), fake_base, capsys, BOUNDARY)
@@ -274,7 +274,7 @@ def test_ac9_paid_no(fake_base, capsys):
 
 
 def test_ac9_realization_without_invoice(fake_base, capsys):
-    """AC-9 / INV-AUDIT-31: непроведенная реализация без счета в шапке -> 'нет счёта'."""
+    """AC-9 / INV-AUDIT-25: непроведенная реализация без счета в шапке -> 'нет счёта'."""
     _sales_unposted(fake_base, "РеализацияТоваровУслуг",
                     ns(Дата=OPEN, Номер="Р-3", Контр="К", ЕстьСчет=False, Счет=None), None)
     body, _, _ = _run(_unposted(), fake_base, capsys, BOUNDARY)
@@ -282,7 +282,7 @@ def test_ac9_realization_without_invoice(fake_base, capsys):
 
 
 def test_ac9_sum_not_passed_to_payment_query(fake_base, capsys):
-    """AC-9 / INV-AUDIT-31: в запрос оплаты уходит только Счет, сумма не передается (У3)."""
+    """AC-9 / INV-AUDIT-25: в запрос оплаты уходит только Счет, сумма не передается (У3)."""
     calls = []
 
     def spy(t, p):

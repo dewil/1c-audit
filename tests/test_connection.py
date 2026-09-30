@@ -23,13 +23,13 @@ class Reg:
 
 
 def test_ac1_64_process_path_in_64():
-    """AC-1 / INV-AUDIT-18: 64 бит, путь в 64 -> без ошибки."""
+    """AC-1 / INV-AUDIT-15: 64 бит, путь в 64 -> без ошибки."""
     from onec_audit.base import check_bitness
     check_bitness(Reg(p64=r"C:\1cv8\comcntr.dll"), process_bits=64)
 
 
 def test_ac2_64_process_path_only_in_32():
-    """AC-2 / INV-AUDIT-18: 64 бит, путь только в 32 -> BitnessError про 32-битный."""
+    """AC-2 / INV-AUDIT-15: 64 бит, путь только в 32 -> BitnessError про 32-битный."""
     from onec_audit.base import BitnessError, check_bitness
     with pytest.raises(BitnessError) as e:
         check_bitness(Reg(p32=r"C:\1cv8\comcntr.dll"), process_bits=64)
@@ -37,13 +37,13 @@ def test_ac2_64_process_path_only_in_32():
 
 
 def test_ac3_32_process_path_in_32():
-    """AC-3 / INV-AUDIT-18: 32 бит (подмена), путь в 32 -> без ошибки."""
+    """AC-3 / INV-AUDIT-15: 32 бит (подмена), путь в 32 -> без ошибки."""
     from onec_audit.base import check_bitness
     check_bitness(Reg(p32=r"C:\1cv8\comcntr.dll"), process_bits=32)
 
 
 def test_ac4_no_path_anywhere():
-    """AC-4 / INV-AUDIT-18: пути нет нигде -> BitnessError с regsvr32."""
+    """AC-4 / INV-AUDIT-15: пути нет нигде -> BitnessError с regsvr32."""
     from onec_audit.base import BitnessError, check_bitness
     with pytest.raises(BitnessError) as e:
         check_bitness(Reg(), process_bits=64)
@@ -51,7 +51,7 @@ def test_ac4_no_path_anywhere():
 
 
 def test_ac5_main_bitness_error_exit5(monkeypatch):
-    """AC-5 / INV-AUDIT-18: BitnessError в main -> код 5."""
+    """AC-5 / INV-AUDIT-15, 18: BitnessError в main -> код 5."""
     from onec_audit.base import BitnessError
     from onec_audit.cli import main
 

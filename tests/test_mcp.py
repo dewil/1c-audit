@@ -49,7 +49,7 @@ def test_ac10_query_list_param_toolerror_before_1c(srv, fake_base):
 
 @pytest.mark.parametrize("stage", ["param", "connect"])
 def test_ac11_errors_become_toolerror(srv, monkeypatch, fake_base, stage):
-    """AC-11 / INV-AUDIT-91: сырая COM-ошибка -> ToolError, без pywintypes."""
+    """AC-11 / INV-AUDIT-94: сырая COM-ошибка -> ToolError, без pywintypes."""
     raw = RuntimeError("pywintypes.com_error: (-2147352567, 'Ошибка', (0, 'x'), None)")
     if stage == "connect":
         def boom(*a, **k):
@@ -136,7 +136,7 @@ def test_ac12_required_null_on_read_failure(srv, fake_base):
 
 
 def test_ac13_release_twice(srv):
-    """AC-13 / INV-AUDIT-94: повторное освобождение безопасно."""
+    """AC-13 / INV-AUDIT-92: повторное освобождение безопасно."""
     srv._release()
     srv._release()
 

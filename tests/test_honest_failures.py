@@ -37,14 +37,14 @@ def _bank_check():
 
 
 def test_ac1_clean_report_exit0_and_clean_phrase(capsys):
-    """AC-1 / INV-AUDIT-10: нет находок и отказов -> 0 и фраза о чистоте."""
+    """AC-1 / INV-AUDIT-18: нет находок и отказов -> 0 и фраза о чистоте."""
     r = Report(echo=True)
     assert r.exit_code() == 0
     assert CLEAN in _summary(capsys, r)
 
 
 def test_ac2_findings_only_exit1():
-    """AC-2 / INV-AUDIT-11: находки без отказов -> 1."""
+    """AC-2 / INV-AUDIT-18: находки без отказов -> 1."""
     r = Report(echo=False)
     r.finding("что-то найдено")
     assert r.exit_code() == 1
@@ -109,7 +109,7 @@ def test_ac5_bank_exchange_all_queries_fail(fake_base, capsys):
 
 
 def test_bank_exchange_no_enum_is_failure(fake_base, capsys):
-    """INV-AUDIT-10 (правило про перечисление): нет СтатусыОбменСБанками -> не выполнено."""
+    """INV-AUDIT-10, 14 (правило про перечисление): нет СтатусыОбменСБанками -> не выполнено."""
     fake_base.fill_names = True
     fake_base.enums = {}
     r = Report(echo=True)
@@ -122,7 +122,7 @@ def test_bank_exchange_no_enum_is_failure(fake_base, capsys):
 def test_ac6_every_check_query_failure_is_reported(
     check, fake_base, patch_base, monkeypatch, capsys
 ):
-    """AC-6 / INV-AUDIT-14, INV-AUDIT-18: любой запрос бросает -> отказ, 4, без падения."""
+    """AC-6 / INV-AUDIT-10, 11, 18: любой запрос бросает -> отказ, 4, без падения."""
     _only_checks(monkeypatch, [check])
     fake_base.raise_all = True
     patch_base(fake_base)
@@ -136,7 +136,7 @@ def test_ac6_every_check_query_failure_is_reported(
 def test_ac6_check_exception_registered_with_check_name(
     fake_base, patch_base, monkeypatch, capsys
 ):
-    """AC-6 / INV-AUDIT-14: исключение из проверки регистрируется с ее именем."""
+    """AC-6 / INV-AUDIT-10, 11: исключение из проверки регистрируется с ее именем."""
     def boom_check(b, r, opt):
         raise ValueError("boom")
 
@@ -209,7 +209,7 @@ def test_ac9_out_unwritable_exit4(fake_base, patch_base, tmp_path, capsys):
 
 
 def test_ac10_all_checks_ok_empty_data_exit0(fake_base, patch_base, capsys):
-    """AC-10 / INV-AUDIT-11: все проверки выполнены на пустых данных -> 0."""
+    """AC-10 / INV-AUDIT-18: все проверки выполнены на пустых данных -> 0."""
     patch_base(fake_base)
     assert main(["--base", "x"]) == 0
     out = capsys.readouterr().out
@@ -218,7 +218,7 @@ def test_ac10_all_checks_ok_empty_data_exit0(fake_base, patch_base, capsys):
 
 
 def test_ac10_finding_exit1(fake_base, patch_base, monkeypatch):
-    """AC-10 / INV-AUDIT-11: выполнено, есть находка -> 1."""
+    """AC-10 / INV-AUDIT-18: выполнено, есть находка -> 1."""
     def finds(b, r, opt):
         r.finding("находка")
     _only_checks(monkeypatch, [finds])
@@ -227,7 +227,7 @@ def test_ac10_finding_exit1(fake_base, patch_base, monkeypatch):
 
 
 def test_ac10_failure_beats_finding(fake_base, patch_base, monkeypatch):
-    """AC-3/AC-10 / INV-AUDIT-11: отказ приоритетнее находок -> 4."""
+    """AC-3/AC-10 / INV-AUDIT-18: отказ приоритетнее находок -> 4."""
     def finds(b, r, opt):
         r.finding("находка")
 
@@ -239,7 +239,7 @@ def test_ac10_failure_beats_finding(fake_base, patch_base, monkeypatch):
 
 
 def test_ac11_status_missing_in_metadata_is_skipped_not_failed(fake_base, capsys):
-    """AC-11 / INV-AUDIT-10: нет статуса в метаданных -> проверка выполнена, пометка о пропуске."""
+    """AC-11 / INV-AUDIT-14: нет статуса в метаданных -> проверка выполнена, пометка о пропуске."""
     # переписан под spec-bank С2, закрепляет то же поведение
     from test_bank import _meta
     _meta(fake_base)
@@ -253,7 +253,7 @@ def test_ac11_status_missing_in_metadata_is_skipped_not_failed(fake_base, capsys
 
 
 def test_u6_no_bank_document_means_not_used_not_failure(fake_base, capsys):
-    """У6 / INV-AUDIT-10: нет документа СообщениеОбменСБанками -> выполнена, 'не используется'."""
+    """У6 / INV-AUDIT-14: нет документа СообщениеОбменСБанками -> выполнена, 'не используется'."""
     fake_base.fill_names = False  # names() пуст: документа нет
     r = Report(echo=True)
     _bank_check()(fake_base, r, Options())
