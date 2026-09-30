@@ -51,4 +51,5 @@ testpaths = ["tests"]
 markers = [
     "honest_failures: честные отказы и коды выхода (INV-AUDIT-10/11/14/18)",
     "locked_boundary: граница закрытого периода (INV-AUDIT-03/04/80)",
+    "sales_links: адресные списки, связи продаж (INV-AUDIT-05/09/20..25/30..32/52)",
 ]

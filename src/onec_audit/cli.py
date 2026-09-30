@@ -48,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
                            "(1 января); находки раньше неё не идут в сводку. "
                            "Без параметра — дата запрета изменения из базы")
     tune.add_argument("--all-docs", action="store_true",
-                      help="сканировать все типы документов, а не короткий список")
+                      help="устарел, игнорируется: сканируются все типы документов")
 
     out = p.add_argument_group("вывод")
     out.add_argument("--out", help="сохранить отчёт в файл")
@@ -108,7 +108,6 @@ def main(argv: list[str] | None = None) -> int:
     options = Options(
         since_year=args.since_year,
         locked_before=args.locked_before,
-        all_docs=args.all_docs,
     )
     if args.locked_before is not None:
         options.locked_source = "параметр"
