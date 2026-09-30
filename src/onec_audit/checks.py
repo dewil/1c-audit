@@ -18,16 +18,19 @@ from .report import Report, money
 class Options:
     """Настройки прогона."""
 
-    since_year: int = 2024
+    since_year: int = field(default_factory=lambda: dt.date.today().year - 2)
     """С какого года смотреть обмен с банком."""
 
-    locked_before: int = 0
-    """Год, до которого правки запрещены (дата запрета изменения).
+    locked_before: dt.date | None = None
+    """Граница закрытого периода: всё строго раньше неё закрыто.
 
     Находки раньше этой границы печатаются с пометкой, но в сводку не идут:
-    исправить их всё равно нельзя, а сводку они забивают. 0 — считать
-    всю историю изменяемой.
+    исправить их всё равно нельзя, а сводку они забивают. None — границы
+    нет, вся история изменяема. Сравнивать только через is_locked().
     """
+
+    locked_source: str = "не задана"
+    """Откуда граница: «параметр», «дата запрета в базе» или «не задана»."""
 
     all_docs: bool = False
     """Сканировать все типы документов, а не короткий список."""
@@ -47,6 +50,73 @@ class Options:
 NEVER_STRUCTURAL = {"РегламентнаяОперация"}
 
 
+def is_locked(moment: dt.date | dt.datetime, opt: Options) -> bool:
+    """Закрыт ли момент: строго раньше границы, сравнение по календарной дате."""
+    if opt.locked_before is None:
+        return False
+    day = moment.date() if isinstance(moment, dt.datetime) else moment
+    return day < opt.locked_before
+
+
+def months_to_check(opt: Options, today: dt.date) -> list[tuple[int, int]]:
+    """Месяцы для закрытия: с месяца границы (без границы — с января прошлого
+    года) по последний завершённый включительно."""
+    start = opt.locked_before or dt.date(today.year - 1, 1, 1)
+    year, month = start.year, start.month
+    result = []
+    while (year, month) < (today.year, today.month):
+        result.append((year, month))
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return result
+
+
+def resolve_boundary(b: Base, r: Report, opt: Options) -> None:
+    """Граница из базы, если параметром она не задана.
+
+    Берётся только общая дата запрета «для всех пользователей» при включённой
+    константе. Дата запрета в 1С — последний закрытый день, граница — следующий.
+    Отсутствие регистра, константы, записи или пустая дата — не отказ.
+    """
+    if opt.locked_before is not None:
+        return
+    opt.locked_source = "не задана"
+    try:
+        if ("ИспользоватьДатыЗапретаИзменения" not in b.names(b.md.Константы)
+                or "ДатыЗапретаИзменения" not in b.names(b.md.РегистрыСведений)):
+            return
+        used = b.one("ВЫБРАТЬ Значение КАК Значение "
+                     "ИЗ Константа.ИспользоватьДатыЗапретаИзменения")
+        if not used or not used.Значение:
+            return
+        # Имена не угадываем: нет перечисления или значения — границы нет.
+        enum = b.md.Перечисления.Найти("ВидыНазначенияДатЗапрета")
+        if enum is None:
+            return
+        values = enum.ЗначенияПеречисления
+        if "ДляВсехПользователей" not in {values.Получить(i).Имя
+                                          for i in range(values.Количество())}:
+            return
+        # Объект — составного типа: общая запись у него пустая ссылка или NULL.
+        row = b.one("""
+            ВЫБРАТЬ МАКСИМУМ(ДатаЗапрета) КАК ДатаЗапрета
+            ИЗ РегистрСведений.ДатыЗапретаИзменения
+            ГДЕ Пользователь = ЗНАЧЕНИЕ(Перечисление.ВидыНазначенияДатЗапрета.ДляВсехПользователей)
+              И Раздел = ЗНАЧЕНИЕ(ПланВидовХарактеристик.РазделыДатЗапретаИзменения.ПустаяСсылка)
+              И (Объект ЕСТЬ NULL
+                 ИЛИ Объект = ЗНАЧЕНИЕ(ПланВидовХарактеристик.РазделыДатЗапретаИзменения.ПустаяСсылка))
+        """)
+        value = row.ДатаЗапрета if row else None
+        if value is None:
+            return
+        day = value.date() if isinstance(value, dt.datetime) else value
+        if day.year <= 1:  # пустая дата 1С
+            return
+        opt.locked_before = day + dt.timedelta(days=1)
+        opt.locked_source = "дата запрета в базе"
+    except Exception as exc:
+        r.fail("locked_boundary", str(exc))
+
+
 # ---------------------------------------------------------------------------
 def unposted_documents(b: Base, r: Report, opt: Options) -> None:
     """Непроведённые документы.
@@ -56,8 +126,8 @@ def unposted_documents(b: Base, r: Report, opt: Options) -> None:
     первичный документ.
     """
     r.head("1. НЕПРОВЕДЁННЫЕ ДОКУМЕНТЫ")
-    if opt.locked_before:
-        r.w(f"Период до {opt.locked_before} года закрыт: правки там невозможны.")
+    if opt.locked_before is not None:
+        r.w(f"Период до {opt.locked_before:%d.%m.%Y} закрыт: правки там невозможны.")
         r.w("Такие строки помечены [закрыт] и в сводку не попадают.")
     r.w()
 
@@ -66,7 +136,11 @@ def unposted_documents(b: Base, r: Report, opt: Options) -> None:
     if opt.all_docs:
         r.w(f"(сканирую все {len(doc_names)} типов документов)")
 
-    year_floor = opt.locked_before or 1
+    # Граница — литералом, не параметром: см. datetime_literal().
+    open_cond = ""
+    if opt.locked_before is not None:
+        floor = dt.datetime.combine(opt.locked_before, dt.time())
+        open_cond = f" И Дата >= {datetime_literal(floor)}"
     rows = []
     failed = False
     for name in scan:
@@ -76,11 +150,10 @@ def unposted_documents(b: Base, r: Report, opt: Options) -> None:
                 ВЫБРАТЬ
                     КОЛИЧЕСТВО(*) КАК Всего,
                     СУММА(ВЫБОР КОГДА НЕ Проведен ТОГДА 1 ИНАЧЕ 0 КОНЕЦ) КАК Непров,
-                    СУММА(ВЫБОР КОГДА НЕ Проведен И ГОД(Дата) >= &Год ТОГДА 1 ИНАЧЕ 0 КОНЕЦ) КАК Открыт
+                    СУММА(ВЫБОР КОГДА НЕ Проведен{open_cond} ТОГДА 1 ИНАЧЕ 0 КОНЕЦ) КАК Открыт
                 ИЗ Документ.{name}
                 ГДЕ НЕ ПометкаУдаления
-                """,
-                Год=year_floor,
+                """
             )
         except Exception as exc:
             r.fail(unposted_documents.__name__, f"{name}: {exc}")
@@ -149,8 +222,8 @@ def _unposted_sales_detail(b: Base, r: Report, opt: Options, anomalous: list) ->
         ]
         no_pay, locked = [], 0
         for it in items:
-            is_locked = bool(opt.locked_before and it["д"].year < opt.locked_before)
-            locked += is_locked
+            closed = is_locked(it["д"], opt)
+            locked += closed
             paid = ""
             try:
                 # Границы окна — литералами, не параметрами: см. datetime_literal().
@@ -173,9 +246,9 @@ def _unposted_sales_detail(b: Base, r: Report, opt: Options, anomalous: list) ->
                 paid = "?"
             if not paid:
                 paid = "НЕТ"
-                if not is_locked:
+                if not closed:
                     no_pay.append(it)
-            mark = "[закрыт]" if is_locked else ""
+            mark = "[закрыт]" if closed else ""
             r.w(f"   {it['д']:%Y-%m-%d}  {it['н']:<15}{it['к'][:29]:<30}"
                 f"{money(it['сум']):>13}  {paid:<17}{mark}")
 
@@ -417,17 +490,19 @@ def month_closing(b: Base, r: Report, opt: Options) -> None:
         r.w("   документа РегламентнаяОперация нет")
         return
 
-    today = dt.date.today()
-    start_year = opt.locked_before or today.year - 1
-    month = dt.datetime(start_year, 1, 1)
-    last = dt.datetime(today.year, today.month, 1) - dt.timedelta(seconds=1)
+    months = months_to_check(opt, dt.date.today())
+    if not months:
+        r.w("   завершённых месяцев в открытом периоде нет")
+        return
+    first, last = dt.datetime(*months[0], 1), dt.datetime(*months[-1], 1)
 
-    r.w(f"   Проверяются завершённые месяцы: {month:%Y-%m} .. {last:%Y-%m}")
+    r.w(f"   Проверяются завершённые месяцы: {first:%Y-%m} .. {last:%Y-%m}")
     r.w()
     r.w(f"   {'Месяц':<10}{'операций':>9}{'проведено':>11}   Состояние")
 
     unclosed = []
-    while month <= last:
+    for year, num in months:
+        month = dt.datetime(year, num, 1)
         end = (month + dt.timedelta(days=32)).replace(day=1) - dt.timedelta(seconds=1)
         total = posted = 0
         failed = False
@@ -478,7 +553,6 @@ def month_closing(b: Base, r: Report, opt: Options) -> None:
         r.w(f"   {month:%Y-%m}   {total:>9}{posted:>11}   {state}")
         if bad:
             unclosed.append(month)
-        month = (month + dt.timedelta(days=32)).replace(day=1)
 
     if unclosed:
         r.finding(f"не закрыто месяцев: {len(unclosed)} "

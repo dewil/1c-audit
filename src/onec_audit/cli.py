@@ -8,8 +8,18 @@ import os
 import sys
 
 from .base import Base, BitnessError
-from .checks import ALL_CHECKS, Options
+from .checks import ALL_CHECKS, Options, resolve_boundary
 from .report import Report
+
+
+def _boundary(text: str) -> dt.date:
+    """Дата ГГГГ-ММ-ДД или год ГГГГ (значит 1 января этого года)."""
+    try:
+        if len(text) == 4 and text.isdigit():
+            return dt.date(int(text), 1, 1)
+        return dt.datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"ждали ГГГГ-ММ-ДД или ГГГГ, получено {text!r}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -33,9 +43,10 @@ def build_parser() -> argparse.ArgumentParser:
     tune = p.add_argument_group("настройка проверок")
     tune.add_argument("--since-year", type=int, default=dt.date.today().year - 2,
                       help="с какого года смотреть обмен с банком")
-    tune.add_argument("--locked-before", type=int, default=0,
-                      help="год, до которого правки запрещены; находки раньше "
-                           "этой границы не идут в сводку (0 — всё изменяемо)")
+    tune.add_argument("--locked-before", type=_boundary, default=None,
+                      help="граница закрытого периода, ГГГГ-ММ-ДД или ГГГГ "
+                           "(1 января); находки раньше неё не идут в сводку. "
+                           "Без параметра — дата запрета изменения из базы")
     tune.add_argument("--all-docs", action="store_true",
                       help="сканировать все типы документов, а не короткий список")
 
@@ -68,6 +79,14 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
 
+    today = dt.date.today()
+    if args.locked_before is not None and args.locked_before > today:
+        print("STOP: --locked-before позже сегодняшнего дня.", file=sys.stderr)
+        return 2
+    if not 2000 <= args.since_year <= today.year:
+        print(f"STOP: --since-year вне диапазона 2000..{today.year}.", file=sys.stderr)
+        return 2
+
     report = Report(echo=not args.quiet)
     try:
         base = Base(args.base, srvr=args.srvr, ref=args.ref, user=args.user)
@@ -91,6 +110,8 @@ def main(argv: list[str] | None = None) -> int:
         locked_before=args.locked_before,
         all_docs=args.all_docs,
     )
+    if args.locked_before is not None:
+        options.locked_source = "параметр"
 
     code = 4  # что бы ни случилось после начала отчёта, это не «чисто»
     try:
@@ -101,6 +122,10 @@ def main(argv: list[str] | None = None) -> int:
         report.w(f"База        : {base.description}")
         report.w(f"Конфигурация: {config}")
         report.w(f"Платформа   : {platform}")
+        resolve_boundary(base, report, options)
+        report.w("Граница     : " + (
+            f"{options.locked_before:%d.%m.%Y} ({options.locked_source})"
+            if options.locked_before is not None else "не задана"))
 
         for check in ALL_CHECKS:
             try:

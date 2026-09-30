@@ -50,4 +50,5 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 markers = [
     "honest_failures: честные отказы и коды выхода (INV-AUDIT-10/11/14/18)",
+    "locked_boundary: граница закрытого периода (INV-AUDIT-03/04/80)",
 ]
