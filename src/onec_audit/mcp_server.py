@@ -226,9 +226,17 @@ def _required(b: Base, attribute: Any) -> tuple[bool | None, str | None]:
     а не молчаливое False.
     """
     try:
-        return bool(attribute.ПроверкаЗаполнения == b.c.ПроверкаЗаполнения.ВыдаватьОшибку), None
+        fill = attribute.ПроверкаЗаполнения
+        enum = b.c.ПроверкаЗаполнения
+        # Сравниваем с обоими значениями: несработавшее COM-сравнение не должно
+        # превращаться в false, как у необязательного реквизита.
+        if fill == enum.ВыдаватьОшибку:
+            return True, None
+        if fill == enum.НеПроверять:
+            return False, None
     except Exception as exc:
         return None, f"обязательность не прочитана: {_readable_error(exc)}"
+    return None, "не удалось определить обязательность"
 
 
 def _attribute(b: Base, attribute: Any) -> dict[str, Any]:
